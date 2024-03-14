@@ -26,9 +26,11 @@ func main() {
 		log.Fatal(err)
 		return
 	}
+	// Trim the newline character from the token string
+	tokenStr := strings.TrimSpace(string(token))
 
 	b, err := telebot.NewBot(telebot.Settings{
-		Token:  string(token),
+		Token:  tokenStr,
 		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
 	})
 
