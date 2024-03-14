@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -12,8 +14,21 @@ import (
 )
 
 func main() {
+	file, err := os.Open("token.txt")
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	defer file.Close()
+
+	token, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
 	b, err := telebot.NewBot(telebot.Settings{
-		Token:  "xyz",
+		Token:  string(token),
 		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
 	})
 
