@@ -52,6 +52,29 @@ func main() {
 		}
 	})
 
+	b.Handle(telebot.OnQuery, func(q *telebot.Query) {
+		sanitizedMsg, sanitized, err := sanitizeURL(q.Text)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		if sanitized {
+			result := &telebot.ArticleResult{
+				Title: "Sanitized URL",
+				Text:  sanitizedMsg,
+			}
+			result.SetResultID("1")
+			results := []telebot.Result{result}
+			err = b.Answer(q, &telebot.QueryResponse{
+				Results: results,
+			})
+			if err != nil {
+				log.Println(err)
+			}
+		}
+	})
+
 	b.Start()
 }
 
