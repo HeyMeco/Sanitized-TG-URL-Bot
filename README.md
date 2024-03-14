@@ -2,7 +2,7 @@
 # Sanitized-TG-URL-Bot
 Telegram bot written in Go which sanitizes URL Queries and adds x.com / tiktok links OpenGraph meta tags
 
-Add it to your Groupchat or use it private here: [@sanititzetelebot](https://t.me/sanititzetelebot)
+Add it to your Groupchat or use it private here: [@sanitizeurlbot](https://t.me/sanitizeurlbot)
 
 # To download & run the binary
 1. Get a Telegram Bot Token from BotFather
