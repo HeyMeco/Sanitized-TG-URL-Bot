@@ -35,7 +35,7 @@ jobs:
       run: go build -v -o sanitizetelebot-${{ matrix.goos }}-${{ matrix.goarch }} sanitizetelebot.go
       
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: sanitizetelebot-${{ matrix.goos }}-${{ matrix.goarch }}
         path: ./sanitizetelebot-${{ matrix.goos }}-${{ matrix.goarch }}
