@@ -131,7 +131,7 @@ func containsURL(text string) bool {
 func sanitizeParsedURL(parsedURL *url.URL) (string, bool) {
 	var sanitized bool
 
-	if parsedURL.RawQuery != "" || parsedURL.Host == "x.com" || strings.HasSuffix(parsedURL.Host, "tiktok.com") {
+	if parsedURL.RawQuery != "" || parsedURL.Host == "x.com" || strings.HasSuffix(parsedURL.Host, "instagram.com") || strings.HasSuffix(parsedURL.Host, "tiktok.com") {
 		parsedURL.RawQuery = ""
 
 		if strings.HasSuffix(parsedURL.Host, "tiktok.com") {
@@ -139,6 +139,9 @@ func sanitizeParsedURL(parsedURL *url.URL) (string, bool) {
 		}
 		if parsedURL.Host == "x.com" {
 			parsedURL.Host = "fixupx.com"
+		}
+		if strings.HasSuffix(parsedURL.Host, "instagram.com") {
+			parsedURL.Host = "ddinstagram.com"
 		}
 
 		sanitized = true
