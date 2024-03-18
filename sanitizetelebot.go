@@ -42,6 +42,10 @@ func main() {
 	b.Handle(telebot.OnText, func(m *telebot.Message) {
 		username := getUsername(m.Sender)
 
+		if strings.Contains(m.Text, "nocut") {
+			return
+		}
+
 		sanitizedMsg, sanitized, err := sanitizeURL(m.Text)
 		if err != nil {
 			log.Println(err)
@@ -49,7 +53,11 @@ func main() {
 		}
 
 		if sanitized {
-			b.Send(m.Chat, "@"+username+" said: "+sanitizedMsg)
+			if m.FromGroup() && strings.Contains(m.Text, "anon") {
+				b.Send(m.Chat, strings.Replace(sanitizedMsg, "anon", "", 1))
+			} else {
+				b.Send(m.Chat, "@"+username+" said: "+sanitizedMsg)
+			}
 			b.Delete(m)
 		}
 	})
@@ -77,6 +85,7 @@ func main() {
 		}
 	})
 
+	log.Println("starting bot")
 	b.Start()
 }
 
