@@ -144,7 +144,10 @@ func sanitizeParsedURL(parsedURL *url.URL) (string, bool) {
 		parsedURL.RawQuery = ""
 
 		if strings.HasSuffix(parsedURL.Host, "tiktok.com") {
-			parsedURL.Host = "vm.dstn.to"
+			// Check if the expanded URL contains "/photo/"
+			if !strings.Contains(parsedURL.Path, "/photo/") {
+				parsedURL.Host = "vm.dstn.to"
+			}
 		}
 		if parsedURL.Host == "x.com" {
 			parsedURL.Host = "fixupx.com"
