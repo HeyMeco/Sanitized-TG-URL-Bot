@@ -141,6 +141,16 @@ func sanitizeParsedURL(parsedURL *url.URL) (string, bool) {
 	var sanitized bool
 
 	if parsedURL.RawQuery != "" || parsedURL.Host == "x.com" || strings.HasSuffix(parsedURL.Host, "instagram.com") || strings.HasSuffix(parsedURL.Host, "tiktok.com") {
+
+		if strings.HasSuffix(parsedURL.Host, "youtube.com") {
+			// Extract the video ID from the URL
+			videoID := parsedURL.Query().Get("v")
+			if videoID != "" {
+				// Reconstruct the URL with only the video ID
+				return fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID), false
+			}
+		}
+
 		parsedURL.RawQuery = ""
 
 		if strings.HasSuffix(parsedURL.Host, "tiktok.com") {
