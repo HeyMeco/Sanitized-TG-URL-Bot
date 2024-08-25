@@ -4,6 +4,21 @@ Telegram bot written in Go which sanitizes URL Queries and adds x.com / tiktok l
 
 Add it to your Groupchat or use it private here: [@sanitizeurlbot](https://t.me/sanitizeurlbot)
 
+# Run the docker image
+```
+docker run -d -e TELEGRAM_BOT_TOKEN=<your-token> mecoblock/sanitizetelebot
+```
+alternatively you can use the compose.yml:
+```
+version: "3.3"
+services:
+  sanitizetelebot:
+    image: mecoblock/sanitizetelebot
+    environment:
+      - TELEGRAM_BOT_TOKEN=#Your token here
+networks: {}
+```
+
 # To download & run the binary
 1. Get a Telegram Bot Token from BotFather
 2. Download the lastest artifact from the actions tab
