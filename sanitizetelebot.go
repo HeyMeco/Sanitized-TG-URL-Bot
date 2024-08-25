@@ -14,20 +14,33 @@ import (
 )
 
 func main() {
-	file, err := os.Open("token.txt")
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	defer file.Close()
+	var tokenStr string
 
-	token, err := io.ReadAll(file)
-	if err != nil {
-		log.Fatal(err)
+	// Check for environment variable first
+	tokenStr = os.Getenv("TELEGRAM_BOT_TOKEN")
+
+	// If environment variable is empty, try to read from file
+	if tokenStr == "" {
+		file, err := os.Open("token.txt")
+		if err != nil {
+			log.Fatal("Error: token.txt is missing or if run as a docker image, the TELEGRAM_BOT_TOKEN environment variable is missing")
+			return
+		}
+		defer file.Close()
+
+		token, err := io.ReadAll(file)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		// Trim the newline character from the token string
+		tokenStr = strings.TrimSpace(string(token))
+	}
+
+	if tokenStr == "" {
+		log.Fatal("Error: Telegram bot token is empty. Please provide a valid token.")
 		return
 	}
-	// Trim the newline character from the token string
-	tokenStr := strings.TrimSpace(string(token))
 
 	b, err := telebot.NewBot(telebot.Settings{
 		Token:  tokenStr,
