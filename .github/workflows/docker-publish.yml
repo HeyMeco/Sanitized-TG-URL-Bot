@@ -37,3 +37,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            TARGETOS=linux
+            TARGETARCH=${{ startsWith(matrix.platform, 'linux/amd64') && 'amd64' || 'arm64' }}

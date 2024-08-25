@@ -1,5 +1,5 @@
 # Use the official Golang image as a build stage
-FROM --platform=$BUILDPLATFORM golang:1.22.1 AS builder
+FROM golang:1.20 as builder
 
 # Set the working directory
 WORKDIR /app
@@ -14,18 +14,14 @@ RUN go mod download
 COPY . .
 
 # Set the target platform for the build
-ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
 
 # Build the Go application for the target platform
-RUN case "${TARGETPLATFORM}" in \
-    "linux/amd64") GOARCH=amd64 ;; \
-    "linux/arm64") GOARCH=arm64 ;; \
-    *) echo "Unsupported platform: ${TARGETPLATFORM}" && exit 1 ;; \
-    esac && \
-    GOOS=linux CGO_ENABLED=0 go build -o sanitizetelebot ./
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 go build -o sanitizetelebot ./
 
 # Use a smaller base image for the final image
-FROM --platform=$TARGETPLATFORM alpine:latest
+FROM alpine:latest
 
 # Set the working directory
 WORKDIR /root/
