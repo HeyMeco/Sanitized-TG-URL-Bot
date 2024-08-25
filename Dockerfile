@@ -1,5 +1,5 @@
 # Use a more recent version of Go
-FROM golang:1.22.1 as builder
+FROM golang:1.22.1 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
