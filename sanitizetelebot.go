@@ -1,3 +1,4 @@
+//v2 uses the rules from https://github.com/Vendicated/Vencord/tree/main/src/plugins/clearURLs so credits to them
 package main
 
 import (
@@ -133,11 +134,207 @@ func sanitizeURL(text string) (string, bool, error) {
 				}
 			}
 
-			word, urlSanitized := sanitizeParsedURL(parsedURL)
-			if urlSanitized {
+			// Create query parameter rules based on defaultRules.ts
+			universalRules := []string{
+				"action_object_map",
+				"action_type_map",
+				"action_ref_map",
+				"spm@*.aliexpress.com",
+				"scm@*.aliexpress.com",
+				"aff_platform",
+				"aff_trace_key",
+				"algo_expid@*.aliexpress.*",
+				"algo_pvid@*.aliexpress.*",
+				"btsid",
+				"ws_ab_test",
+				"pd_rd_*@amazon.*",
+				"_encoding@amazon.*",
+				"psc@amazon.*",
+				"tag@amazon.*",
+				"ref_@amazon.*",
+				"pf_rd_*@amazon.*",
+				"pf@amazon.*",
+				"crid@amazon.*",
+				"keywords@amazon.*",
+				"sprefix@amazon.*",
+				"sr@amazon.*",
+				"ie@amazon.*",
+				"node@amazon.*",
+				"qid@amazon.*",
+				"callback@bilibili.com",
+				"cvid@bing.com",
+				"form@bing.com",
+				"sk@bing.com",
+				"sp@bing.com",
+				"sc@bing.com",
+				"qs@bing.com",
+				"pq@bing.com",
+				"sc_cid",
+				"mkt_tok",
+				"trk",
+				"trkCampaign",
+				"ga_*",
+				"gclid",
+				"gclsrc",
+				"hmb_campaign",
+				"hmb_medium",
+				"hmb_source",
+				"spReportId",
+				"spJobID",
+				"spUserID",
+				"spMailingID",
+				"itm_*",
+				"s_cid",
+				"elqTrackId",
+				"elqTrack",
+				"assetType",
+				"assetId",
+				"recipientId",
+				"campaignId",
+				"siteId",
+				"mc_cid",
+				"mc_eid",
+				"pk_*",
+				"sc_campaign",
+				"sc_channel",
+				"sc_content",
+				"sc_medium",
+				"sc_outcome",
+				"sc_geo",
+				"sc_country",
+				"nr_email_referer",
+				"vero_conv",
+				"vero_id",
+				"yclid",
+				"_openstat",
+				"mbid",
+				"cmpid",
+				"cid",
+				"c_id",
+				"campaign_id",
+				"Campaign",
+				"hash@ebay.*",
+				"fb_action_ids",
+				"fb_action_types",
+				"fb_ref",
+				"fb_source",
+				"fbclid",
+				"refsrc@facebook.com",
+				"hrc@facebook.com",
+				"gs_l",
+				"gs_lcp@google.*",
+				"ved@google.*",
+				"ei@google.*",
+				"sei@google.*",
+				"gws_rd@google.*",
+				"gs_gbg@google.*",
+				"gs_mss@google.*",
+				"gs_rn@google.*",
+				"_hsenc",
+				"_hsmi",
+				"__hssc",
+				"__hstc",
+				"hsCtaTracking",
+				"source@sourceforge.net",
+				"position@sourceforge.net",
+				"t@*.twitter.com",
+				"s@*.twitter.com",
+				"ref_*@*.twitter.com",
+				"t@*.x.com",
+				"s@*.x.com",
+				"ref_*@*.x.com",
+				"t@*.fixupx.com",
+				"s@*.fixupx.com",
+				"ref_*@*.fixupx.com",
+				"t@*.fxtwitter.com",
+				"s@*.fxtwitter.com",
+				"ref_*@*.fxtwitter.com",
+				"t@*.twittpr.com",
+				"s@*.twittpr.com",
+				"ref_*@*.twittpr.com",
+				"t@*.fixvx.com",
+				"s@*.fixvx.com",
+				"ref_*@*.fixvx.com",
+				"tt_medium",
+				"tt_content",
+				"lr@yandex.*",
+				"redircnt@yandex.*",
+				"feature@*.youtube.com",
+				"kw@*.youtube.com",
+				"si@*.youtube.com",
+				"pp@*.youtube.com",
+				"si@*.youtu.be",
+				"wt_zmc",
+				"utm_source",
+				"utm_content",
+				"utm_medium",
+				"utm_campaign",
+				"utm_term",
+				"si@open.spotify.com",
+				"igshid",
+				"igsh",
+				"share_id@reddit.com",
+				"si@soundcloud.com",
+			}
+
+			// Host-specific rules
+			hostRules := map[string][]string{
+				"amazon": {"pd_rd_", "_encoding", "psc", "tag", "ref_", "pf_rd_", "pf", "crid"},
+				"youtube.com": {"feature", "kw", "si", "pp"},
+				"youtu.be": {"si"},
+				"twitter.com": {"t", "s", "ref_"},
+				"x.com": {"t", "s", "ref_"},
+				"instagram.com": {"igshid"},
+				"spotify.com": {"si"},
+				"reddit.com": {"share_id"},
+				"soundcloud.com": {"si"},
+			}
+
+			// Clean universal parameters
+			q := parsedURL.Query()
+			for param := range q {
+				for _, rule := range universalRules {
+					if strings.HasPrefix(param, rule) {
+						q.Del(param)
+						sanitized = true
+					}
+				}
+			}
+
+			// Clean host-specific parameters
+			for host, rules := range hostRules {
+				if strings.Contains(parsedURL.Host, host) {
+					for param := range q {
+						for _, rule := range rules {
+							if strings.HasPrefix(param, rule) {
+								q.Del(param)
+								sanitized = true
+							}
+						}
+					}
+				}
+			}
+
+			// Update URL with cleaned parameters
+			parsedURL.RawQuery = q.Encode()
+
+			// Handle special domain replacements
+			if strings.HasSuffix(parsedURL.Host, "tiktok.com") {
+				if !strings.Contains(parsedURL.Path, "/photo/") {
+					parsedURL.Host = "vm.dstn.to"
+					sanitized = true
+				}
+			}
+			if parsedURL.Host == "x.com" {
+				parsedURL.Host = "fixupx.com"
 				sanitized = true
 			}
-			sanitizedWords = append(sanitizedWords, word)
+			if strings.HasSuffix(parsedURL.Host, "instagram.com") {
+				parsedURL.Host = "ddinstagram.com"
+				sanitized = true
+			}
+
+			sanitizedWords = append(sanitizedWords, parsedURL.String())
 		} else {
 			sanitizedWords = append(sanitizedWords, word)
 		}
