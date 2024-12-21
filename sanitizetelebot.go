@@ -320,8 +320,14 @@ func sanitizeURL(text string) (string, bool, error) {
 
 			// Handle special domain replacements
 			if strings.HasSuffix(parsedURL.Host, "tiktok.com") {
-				if !strings.Contains(parsedURL.Path, "/photo/") {
+				// Check if the expanded URL contains "/photo/" or "/live"
+				if !strings.Contains(parsedURL.Path, "/photo/") && !strings.Contains(parsedURL.Path, "/live") {
 					parsedURL.Host = "vm.dstn.to"
+					sanitized = true
+				}
+				// Remove query parameters if the path contains "/live"
+				if strings.Contains(parsedURL.Path, "/live") {
+					parsedURL.RawQuery = ""
 					sanitized = true
 				}
 			}
@@ -353,41 +359,6 @@ func sanitizeURL(text string) (string, bool, error) {
 
 func containsURL(text string) bool {
 	return strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://")
-}
-
-func sanitizeParsedURL(parsedURL *url.URL) (string, bool) {
-	var sanitized bool
-
-	if parsedURL.RawQuery != "" || parsedURL.Host == "x.com" || strings.HasSuffix(parsedURL.Host, "instagram.com") || strings.HasSuffix(parsedURL.Host, "tiktok.com") {
-
-		if strings.HasSuffix(parsedURL.Host, "youtube.com") {
-			// Extract the video ID from the URL
-			videoID := parsedURL.Query().Get("v")
-			if videoID != "" {
-				// Reconstruct the URL with only the video ID
-				return fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID), false
-			}
-		}
-
-		parsedURL.RawQuery = ""
-
-		if strings.HasSuffix(parsedURL.Host, "tiktok.com") {
-			// Check if the expanded URL contains "/photo/"
-			if !strings.Contains(parsedURL.Path, "/photo/") {
-				parsedURL.Host = "vm.dstn.to"
-			}
-		}
-		if parsedURL.Host == "x.com" {
-			parsedURL.Host = "fixupx.com"
-		}
-		if strings.HasSuffix(parsedURL.Host, "instagram.com") {
-			parsedURL.Host = "ddinstagram.com"
-		}
-
-		sanitized = true
-	}
-
-	return parsedURL.String(), sanitized
 }
 
 func ExpandUrl(shortURL string) (string, error) {
