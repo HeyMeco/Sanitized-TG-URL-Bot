@@ -1,4 +1,4 @@
-//v2 uses the rules from https://github.com/Vendicated/Vencord/tree/main/src/plugins/clearURLs so credits to them
+// v2 uses the rules from https://github.com/Vendicated/Vencord/tree/main/src/plugins/clearURLs so credits to them
 package main
 
 import (
@@ -279,15 +279,16 @@ func sanitizeURL(text string) (string, bool, error) {
 
 			// Host-specific rules
 			hostRules := map[string][]string{
-				"amazon": {"pd_rd_", "_encoding", "psc", "tag", "ref_", "pf_rd_", "pf", "crid"},
-				"youtube.com": {"feature", "kw", "si", "pp"},
-				"youtu.be": {"si"},
-				"twitter.com": {"t", "s", "ref_"},
-				"x.com": {"t", "s", "ref_"},
-				"instagram.com": {"igshid"},
-				"spotify.com": {"si"},
-				"reddit.com": {"share_id"},
+				"amazon":         {"pd_rd_", "_encoding", "psc", "tag", "ref_", "pf_rd_", "pf", "crid"},
+				"youtube.com":    {"feature", "kw", "si", "pp"},
+				"youtu.be":       {"si"},
+				"twitter.com":    {"t", "s", "ref_"},
+				"x.com":          {"t", "s", "ref_"},
+				"instagram.com":  {"igshid"},
+				"spotify.com":    {"si"},
+				"reddit.com":     {"share_id"},
 				"soundcloud.com": {"si"},
+				"tiktok":         {"_r", "_t"},
 			}
 
 			// Clean universal parameters
@@ -367,7 +368,7 @@ func ExpandUrl(shortURL string) (string, error) {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Received non-200 status code")
+		return "", fmt.Errorf("received non-200 status code")
 	}
 	return resp.Request.URL.String(), nil
 }
