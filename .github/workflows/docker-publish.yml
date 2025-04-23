@@ -18,6 +18,9 @@ jobs:
     # Only run if the Go build workflow succeeded
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -28,18 +31,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Download AMD64 Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: sanitizetelebot-linux-amd64
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
-          path: bin
+      - name: Get architecture
+        id: platform
+        run: |
+          # Extract architecture from platform string
+          echo "arch=${platform#*/}" >> $GITHUB_OUTPUT
+        env:
+          platform: ${{ matrix.platform }}
 
-      - name: Download ARM64 Artifact
+      - name: Download Binary
         uses: actions/download-artifact@v4
         with:
-          name: sanitizetelebot-linux-arm64
+          name: sanitizetelebot-linux-${{ steps.platform.outputs.arch }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
           path: bin
@@ -57,8 +60,8 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ env.IMAGE_NAME }}:latest
           build-args: |
-            APP_BINARY=bin/sanitizetelebot-linux-${TARGETARCH}
+            APP_BINARY=bin/sanitizetelebot-linux-${{ steps.platform.outputs.arch }}
