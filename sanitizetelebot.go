@@ -2,17 +2,32 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	telebot "gopkg.in/tucnak/telebot.v2"
 )
+
+// TikwmResponse represents the JSON response from tikwm.com API
+type TikwmResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data Data   `json:"data"`
+}
+
+type Data struct {
+	Images []string `json:"images"`
+}
 
 func main() {
 	var tokenStr string
@@ -60,24 +75,53 @@ func main() {
 			return
 		}
 
-		sanitizedMsg, sanitized, err := sanitizeURL(m.Text)
+		sanitizedMsg, sanitized, isPhotoURL, photoURLs, err := sanitizeURL(m.Text)
 		if err != nil {
 			log.Println(err)
 			return
 		}
 
 		if sanitized {
-			if m.FromGroup() && strings.Contains(m.Text, "anon") {
-				b.Send(m.Chat, strings.Replace(sanitizedMsg, "anon", "", 1))
+			if isPhotoURL && len(photoURLs) > 0 {
+				// Create album of photos with caption on first photo
+				album := make(telebot.Album, 0)
+				for i, photoPath := range photoURLs {
+					var photo *telebot.Photo
+					if i == 0 {
+						// Add caption to first photo
+						photo = &telebot.Photo{
+							File:    telebot.FromDisk(photoPath),
+							Caption: fmt.Sprintf("@%s said: [Original Link](%s)", username, m.Text),
+						}
+					} else {
+						photo = &telebot.Photo{File: telebot.FromDisk(photoPath)}
+					}
+					album = append(album, photo)
+				}
+
+				// Send the album
+				_, err := b.SendAlbum(m.Chat, album, &telebot.SendOptions{ParseMode: telebot.ModeMarkdown})
+				if err != nil {
+					log.Printf("Failed to send album: %v", err)
+				}
+
+				// Clean up the cached images
+				for _, photoPath := range photoURLs {
+					os.Remove(photoPath)
+				}
 			} else {
-				b.Send(m.Chat, "@"+username+" said: "+sanitizedMsg)
+				if m.FromGroup() && strings.Contains(m.Text, "anon") {
+					b.Send(m.Chat, strings.Replace(sanitizedMsg, "anon", "", 1))
+				} else {
+					b.Send(m.Chat, "@"+username+" said: "+sanitizedMsg)
+				}
 			}
 			b.Delete(m)
 		}
 	})
 
 	b.Handle(telebot.OnQuery, func(q *telebot.Query) {
-		sanitizedMsg, sanitized, err := sanitizeURL(q.Text)
+		sanitizedMsg, sanitized, _, _, err := sanitizeURL(q.Text)
 		if err != nil {
 			log.Println(err)
 			return
@@ -110,11 +154,13 @@ func getUsername(sender *telebot.User) string {
 	return sender.Username
 }
 
-func sanitizeURL(text string) (string, bool, error) {
+func sanitizeURL(text string) (string, bool, bool, []string, error) {
 	// Split text into paragraphs first
 	paragraphs := strings.Split(text, "\n")
 	var sanitizedParagraphs []string
 	var sanitized bool
+	var isPhotoURL bool
+	var photoURLs []string
 
 	for _, paragraph := range paragraphs {
 		if paragraph == "" {
@@ -136,12 +182,26 @@ func sanitizeURL(text string) (string, bool, error) {
 				if parsedURL.Host == "vm.tiktok.com" || parsedURL.Host == "tiktok.com" {
 					word, err = ExpandUrl(word)
 					if err != nil {
-						return "", false, err
+						return "", false, false, nil, err
 					}
 					parsedURL, err = url.Parse(word)
 					if err != nil {
-						return "", false, err
+						return "", false, false, nil, err
 					}
+				}
+
+				// Check if it's a TikTok photo URL
+				if strings.HasSuffix(parsedURL.Host, "tiktok.com") && strings.Contains(parsedURL.Path, "/photo/") {
+					isPhotoURL = true
+					photos, err := fetchTikTokPhotos(parsedURL.String())
+					if err != nil {
+						log.Printf("Failed to fetch TikTok photos: %v", err)
+					} else {
+						photoURLs = photos
+					}
+					sanitizedWords = append(sanitizedWords, parsedURL.String())
+					sanitized = true
+					continue
 				}
 
 				// Create query parameter rules based on defaultRules.ts
@@ -368,7 +428,7 @@ func sanitizeURL(text string) (string, bool, error) {
 		sanitizedParagraphs = append(sanitizedParagraphs, strings.Join(sanitizedWords, " "))
 	}
 
-	return strings.Join(sanitizedParagraphs, "\n"), sanitized, nil
+	return strings.Join(sanitizedParagraphs, "\n"), sanitized, isPhotoURL, photoURLs, nil
 }
 
 func containsURL(text string) bool {
@@ -384,4 +444,92 @@ func ExpandUrl(shortURL string) (string, error) {
 		return "", fmt.Errorf("received non-200 status code")
 	}
 	return resp.Request.URL.String(), nil
+}
+
+func downloadImage(imageURL string) (string, error) {
+	// Create cache directory if it doesn't exist
+	cacheDir := "image_cache"
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", err
+	}
+
+	// Create a hash of the URL for a shorter, safe filename
+	hasher := sha256.New()
+	hasher.Write([]byte(imageURL))
+	hashStr := hex.EncodeToString(hasher.Sum(nil))[:16] // Use first 16 chars of hash
+
+	// Get the file extension from the URL path
+	parsedURL, err := url.Parse(imageURL)
+	if err != nil {
+		return "", err
+	}
+	ext := filepath.Ext(parsedURL.Path)
+	if ext == "" {
+		ext = ".jpg" // Default to .jpg if no extension found
+	}
+
+	// Generate filename using timestamp and hash
+	filename := filepath.Join(cacheDir, fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hashStr, ext))
+
+	// Download the image
+	resp, err := http.Get(imageURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download image: %d", resp.StatusCode)
+	}
+
+	// Create the file
+	file, err := os.Create(filename)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	// Copy the content
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return filename, nil
+}
+
+func fetchTikTokPhotos(photoURL string) ([]string, error) {
+	apiURL := fmt.Sprintf("https://tikwm.com/api?url=%s&hd=1&cursor=0", url.QueryEscape(photoURL))
+
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tikwm API returned status: %d", resp.StatusCode)
+	}
+
+	var tikwmResp TikwmResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tikwmResp); err != nil {
+		return nil, err
+	}
+
+	if tikwmResp.Code != 0 {
+		return nil, fmt.Errorf("tikwm API error: %s", tikwmResp.Msg)
+	}
+
+	// Download all images
+	var localPaths []string
+	for _, imgURL := range tikwmResp.Data.Images {
+		localPath, err := downloadImage(imgURL)
+		if err != nil {
+			log.Printf("Failed to download image %s: %v", imgURL, err)
+			continue
+		}
+		localPaths = append(localPaths, localPath)
+	}
+
+	return localPaths, nil
 }
