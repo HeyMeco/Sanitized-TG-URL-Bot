@@ -78,6 +78,6 @@ jobs:
       
       - name: Create and push manifest
         run: |
-          docker buildx imagetools create ${{ env.IMAGE_NAME }}:latest \
+          docker buildx imagetools create --push ${{ env.IMAGE_NAME }}:latest \
             ${{ env.IMAGE_NAME }}:amd64-latest \
             ${{ env.IMAGE_NAME }}:arm64-latest
