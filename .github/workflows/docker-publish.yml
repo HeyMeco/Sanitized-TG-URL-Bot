@@ -78,19 +78,6 @@ jobs:
       
       - name: Create and push manifest
         run: |
-          # Enable Docker experimental features
-          export DOCKER_CLI_EXPERIMENTAL=enabled
-          
-          # Create and push the manifest list
-          docker manifest create ${{ env.IMAGE_NAME }}:latest \
+          docker buildx imagetools create ${{ env.IMAGE_NAME }}:latest \
             ${{ env.IMAGE_NAME }}:amd64-latest \
             ${{ env.IMAGE_NAME }}:arm64-latest
-          
-          # Annotate the manifest with platform-specific information
-          docker manifest annotate ${{ env.IMAGE_NAME }}:latest \
-            ${{ env.IMAGE_NAME }}:amd64-latest --os linux --arch amd64
-          docker manifest annotate ${{ env.IMAGE_NAME }}:latest \
-            ${{ env.IMAGE_NAME }}:arm64-latest --os linux --arch arm64
-          
-          # Push the manifest
-          docker manifest push --purge ${{ env.IMAGE_NAME }}:latest
