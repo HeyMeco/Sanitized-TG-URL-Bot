@@ -83,8 +83,8 @@ jobs:
           
           # Create and push the manifest list
           docker manifest create ${{ env.IMAGE_NAME }}:latest \
-            --amend "${{ env.IMAGE_NAME }}:amd64-latest@$(docker manifest inspect ${{ env.IMAGE_NAME }}:amd64-latest | jq -r '.manifests[] | select(.platform.architecture=="amd64").digest')" \
-            --amend "${{ env.IMAGE_NAME }}:arm64-latest@$(docker manifest inspect ${{ env.IMAGE_NAME }}:arm64-latest | jq -r '.manifests[] | select(.platform.architecture=="arm64").digest')"
+            ${{ env.IMAGE_NAME }}:amd64-latest \
+            ${{ env.IMAGE_NAME }}:arm64-latest
           
           # Annotate the manifest with platform-specific information
           docker manifest annotate ${{ env.IMAGE_NAME }}:latest \
