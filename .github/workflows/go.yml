@@ -32,7 +32,7 @@ jobs:
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
-      run: go build -v -o sanitizetelebot-${{ matrix.goos }}-${{ matrix.goarch }} sanitizetelebot.go
+      run: go build -v -o sanitizetelebot-${{ matrix.goos }}-${{ matrix.goarch }} .
       
     - name: Upload artifact
       uses: actions/upload-artifact@v4

@@ -10,7 +10,6 @@ docker run -d -e TELEGRAM_BOT_TOKEN=<your-token> mecoblock/sanitizetelebot
 ```
 alternatively you can use the compose.yml:
 ```
-version: "3.3"
 services:
   sanitizetelebot:
     image: mecoblock/sanitizetelebot
@@ -28,6 +27,6 @@ networks: {}
 # To build and run it yourself
 1. Get a Telegram Bot Token from BotFather
 2. Clone the Repo
-3. Open the Terminal in the project directory and type `go build`
+3. Open the Terminal in the project directory and type `go build .`
 4. Create a token.txt file and paste in your Token from Botfather
 5. Run the executable
