@@ -82,16 +82,25 @@ func main() {
 		}
 
 		if sanitized {
+			// Create send options with reply if original was a reply
+			sendOpts := &telebot.SendOptions{ParseMode: telebot.ModeMarkdown}
+			if m.IsReply() {
+				sendOpts.ReplyTo = m.ReplyTo
+			}
+
 			if isPhotoURL && len(photoURLs) > 0 {
 				// Create album of photos with caption on first photo
 				album := make(telebot.Album, 0)
 				for i, photoPath := range photoURLs {
 					var photo *telebot.Photo
 					if i == 0 {
+						// Escape brackets in the URL to prevent Markdown parsing issues
+						escapedURL := strings.ReplaceAll(m.Text, "[", "\\[")
+						escapedURL = strings.ReplaceAll(escapedURL, "]", "\\]")
 						// Add caption to first photo
 						photo = &telebot.Photo{
 							File:    telebot.FromDisk(photoPath),
-							Caption: fmt.Sprintf("@%s said: [Original Link](%s)", username, m.Text),
+							Caption: fmt.Sprintf("@%s said: [Original Link](%s)", username, escapedURL),
 						}
 					} else {
 						photo = &telebot.Photo{File: telebot.FromDisk(photoPath)}
@@ -99,8 +108,8 @@ func main() {
 					album = append(album, photo)
 				}
 
-				// Send the album
-				_, err := b.SendAlbum(m.Chat, album, &telebot.SendOptions{ParseMode: telebot.ModeMarkdown})
+				// Send the album with reply
+				_, err := b.SendAlbum(m.Chat, album, sendOpts)
 				if err != nil {
 					log.Printf("Failed to send album: %v", err)
 				}
@@ -110,13 +119,29 @@ func main() {
 					os.Remove(photoPath)
 				}
 			} else {
+				var err error
+				// Escape any Markdown special characters in the sanitized URL
+				escapedMsg := strings.ReplaceAll(sanitizedMsg, "[", "\\[")
+				escapedMsg = strings.ReplaceAll(escapedMsg, "]", "\\]")
+				escapedMsg = strings.ReplaceAll(escapedMsg, "_", "\\_")
+				escapedMsg = strings.ReplaceAll(escapedMsg, "*", "\\*")
+				escapedMsg = strings.ReplaceAll(escapedMsg, "`", "\\`")
+
 				if m.FromGroup() && strings.Contains(m.Text, "anon") {
-					b.Send(m.Chat, strings.Replace(sanitizedMsg, "anon", "", 1))
+					_, err = b.Send(m.Chat, strings.Replace(escapedMsg, "anon", "", 1), sendOpts)
 				} else {
-					b.Send(m.Chat, "@"+username+" said: "+sanitizedMsg)
+					_, err = b.Send(m.Chat, "@"+username+" said: "+escapedMsg, sendOpts)
+				}
+				if err != nil {
+					log.Printf("Failed to send message: %v", err)
+					return
 				}
 			}
-			b.Delete(m)
+
+			// Only try to delete the original message if we successfully sent the new one
+			if err := b.Delete(m); err != nil {
+				log.Printf("Failed to delete original message: %v", err)
+			}
 		}
 	})
 
