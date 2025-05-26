@@ -90,13 +90,13 @@ func main() {
 				sendOpts.ReplyTo = m.ReplyTo
 			}
 
-			// Create URL buttons
-			if len(originalURLs) > 0 {
-				buttons := createURLButtons(originalURLs)
-				sendOpts.ReplyMarkup = &telebot.ReplyMarkup{InlineKeyboard: buttons}
-			}
-
 			if isPhotoURL && len(photoURLs) > 0 {
+				// Create URL buttons for photo albums
+				if len(originalURLs) > 0 {
+					buttons := createURLButtons(originalURLs)
+					sendOpts.ReplyMarkup = &telebot.ReplyMarkup{InlineKeyboard: buttons}
+				}
+
 				// Create album of photos with caption on first photo
 				album := make(telebot.Album, 0)
 				for i, photoPath := range photoURLs {
@@ -104,8 +104,8 @@ func main() {
 					if i == 0 {
 						// Get the message text in the default format
 						messageText := ""
-						escapedMsg := escapeMarkdown(m.Text)
-						if m.FromGroup() && strings.Contains(m.Text, "anon") {
+						escapedMsg := escapeMarkdown(sanitizedMsg)
+						if m.FromGroup() && strings.Contains(sanitizedMsg, "anon") {
 							messageText = strings.Replace(escapedMsg, "anon", "", 1)
 						} else {
 							messageText = "@" + username + " said: " + escapedMsg
@@ -120,7 +120,7 @@ func main() {
 					album = append(album, photo)
 				}
 
-				// Send the album with reply
+				// Send the album with reply and buttons
 				_, err := b.SendAlbum(m.Chat, album, sendOpts)
 				if err != nil {
 					log.Printf("Failed to send album: %v", err)
@@ -131,11 +131,17 @@ func main() {
 					os.Remove(photoPath)
 				}
 			} else {
+				// Create URL buttons for regular messages
+				if len(originalURLs) > 0 {
+					buttons := createURLButtons(originalURLs)
+					sendOpts.ReplyMarkup = &telebot.ReplyMarkup{InlineKeyboard: buttons}
+				}
+
 				var err error
 				// Escape any Markdown special characters in the sanitized URL
 				escapedMsg := escapeMarkdown(sanitizedMsg)
 
-				if m.FromGroup() && strings.Contains(m.Text, "anon") {
+				if m.FromGroup() && strings.Contains(sanitizedMsg, "anon") {
 					_, err = b.Send(m.Chat, strings.Replace(escapedMsg, "anon", "", 1), sendOpts)
 				} else {
 					_, err = b.Send(m.Chat, "@"+username+" said: "+escapedMsg, sendOpts)
@@ -234,6 +240,8 @@ func sanitizeURL(text string) (string, bool, bool, []string, []string, error) {
 					} else {
 						photoURLs = photos
 					}
+					// Remove all query parameters from TikTok photo URLs
+					parsedURL.RawQuery = ""
 					sanitizedWords = append(sanitizedWords, parsedURL.String())
 					sanitized = true
 					continue
@@ -295,11 +303,11 @@ func sanitizeURL(text string) (string, bool, bool, []string, []string, error) {
 						sanitized = true
 					}
 
-				// Only rewrite to ddinstagram if path includes "/reel/" or "/p/"
-				if strings.Contains(parsedURL.Path, "/reel/") || strings.Contains(parsedURL.Path, "/p/") {
-					parsedURL.Host = "d.ddinstagram.com"
-					sanitized = true
-				}
+					// Only rewrite to ddinstagram if path includes "/reel/" or "/p/"
+					if strings.Contains(parsedURL.Path, "/reel/") || strings.Contains(parsedURL.Path, "/p/") {
+						parsedURL.Host = "d.ddinstagram.com"
+						sanitized = true
+					}
 
 				}
 
