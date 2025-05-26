@@ -407,14 +407,16 @@ func sanitizeURL(text string) (string, bool, bool, []string, error) {
 					sanitized = true
 				}
 				if strings.HasSuffix(parsedURL.Host, "instagram.com") {
-					parsedURL.Host = "ddinstagram.com"
-					sanitized = true
-
 					// Logic to remove "profilecard" path as those result in an error page without share id
 					pathSegments := strings.Split(parsedURL.Path, "/")
 					if len(pathSegments) > 2 && pathSegments[2] == "profilecard" {
 						// Reconstruct the path without the "profilecard" segment
 						parsedURL.Path = "/" + pathSegments[1]
+						sanitized = true
+					}
+					// Only rewrite to ddinstagram if path includes "reel"
+					if strings.Contains(parsedURL.Path, "reel") {
+						parsedURL.Host = "ddinstagram.com"
 						sanitized = true
 					}
 				}
