@@ -95,8 +95,7 @@ func main() {
 					var photo *telebot.Photo
 					if i == 0 {
 						// Escape brackets in the URL to prevent Markdown parsing issues
-						escapedURL := strings.ReplaceAll(m.Text, "[", "\\[")
-						escapedURL = strings.ReplaceAll(escapedURL, "]", "\\]")
+						escapedURL := escapeMarkdown(m.Text)
 						// Add caption to first photo
 						photo = &telebot.Photo{
 							File:    telebot.FromDisk(photoPath),
@@ -121,11 +120,7 @@ func main() {
 			} else {
 				var err error
 				// Escape any Markdown special characters in the sanitized URL
-				escapedMsg := strings.ReplaceAll(sanitizedMsg, "[", "\\[")
-				escapedMsg = strings.ReplaceAll(escapedMsg, "]", "\\]")
-				escapedMsg = strings.ReplaceAll(escapedMsg, "_", "\\_")
-				escapedMsg = strings.ReplaceAll(escapedMsg, "*", "\\*")
-				escapedMsg = strings.ReplaceAll(escapedMsg, "`", "\\`")
+				escapedMsg := escapeMarkdown(sanitizedMsg)
 
 				if m.FromGroup() && strings.Contains(m.Text, "anon") {
 					_, err = b.Send(m.Chat, strings.Replace(escapedMsg, "anon", "", 1), sendOpts)
@@ -473,6 +468,15 @@ func ExpandUrl(shortURL string) (string, error) {
 		return "", fmt.Errorf("received non-200 status code")
 	}
 	return resp.Request.URL.String(), nil
+}
+
+func escapeMarkdown(text string) string {
+	text = strings.ReplaceAll(text, "[", "\\[")
+	text = strings.ReplaceAll(text, "]", "\\]")
+	text = strings.ReplaceAll(text, "_", "\\_")
+	text = strings.ReplaceAll(text, "*", "\\*")
+	text = strings.ReplaceAll(text, "`", "\\`")
+	return text
 }
 
 func downloadImage(imageURL string) (string, error) {
