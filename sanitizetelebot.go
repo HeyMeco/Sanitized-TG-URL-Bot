@@ -94,12 +94,17 @@ func main() {
 				for i, photoPath := range photoURLs {
 					var photo *telebot.Photo
 					if i == 0 {
-						// Escape brackets in the URL to prevent Markdown parsing issues
-						escapedURL := escapeMarkdown(m.Text)
-						// Add caption to first photo
+						// Get the message text in the default format
+						messageText := ""
+						escapedMsg := escapeMarkdown(m.Text)
+						if m.FromGroup() && strings.Contains(m.Text, "anon") {
+							messageText = strings.Replace(escapedMsg, "anon", "", 1)
+						} else {
+							messageText = "@" + username + " said: " + escapedMsg
+						}
 						photo = &telebot.Photo{
 							File:    telebot.FromDisk(photoPath),
-							Caption: fmt.Sprintf("@%s said: [Original Link](%s)", username, escapedURL),
+							Caption: messageText,
 						}
 					} else {
 						photo = &telebot.Photo{File: telebot.FromDisk(photoPath)}
