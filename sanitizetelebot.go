@@ -75,7 +75,7 @@ func main() {
 			return
 		}
 
-		sanitizedMsg, sanitized, isPhotoURL, photoURLs, err := sanitizeURL(m.Text)
+		sanitizedMsg, sanitized, isPhotoURL, photoURLs, originalURLs, err := sanitizeURL(m.Text)
 		if err != nil {
 			log.Println(err)
 			return
@@ -83,9 +83,17 @@ func main() {
 
 		if sanitized {
 			// Create send options with reply if original was a reply
-			sendOpts := &telebot.SendOptions{ParseMode: telebot.ModeMarkdown}
+			sendOpts := &telebot.SendOptions{
+				ParseMode: telebot.ModeMarkdown,
+			}
 			if m.IsReply() {
 				sendOpts.ReplyTo = m.ReplyTo
+			}
+
+			// Create URL buttons
+			if len(originalURLs) > 0 {
+				buttons := createURLButtons(originalURLs)
+				sendOpts.ReplyMarkup = &telebot.ReplyMarkup{InlineKeyboard: buttons}
 			}
 
 			if isPhotoURL && len(photoURLs) > 0 {
@@ -94,12 +102,17 @@ func main() {
 				for i, photoPath := range photoURLs {
 					var photo *telebot.Photo
 					if i == 0 {
-						// Escape brackets in the URL to prevent Markdown parsing issues
-						escapedURL := escapeMarkdown(m.Text)
-						// Add caption to first photo
+						// Get the message text in the default format
+						messageText := ""
+						escapedMsg := escapeMarkdown(m.Text)
+						if m.FromGroup() && strings.Contains(m.Text, "anon") {
+							messageText = strings.Replace(escapedMsg, "anon", "", 1)
+						} else {
+							messageText = "@" + username + " said: " + escapedMsg
+						}
 						photo = &telebot.Photo{
 							File:    telebot.FromDisk(photoPath),
-							Caption: fmt.Sprintf("@%s said: [Original Link](%s)", username, escapedURL),
+							Caption: messageText,
 						}
 					} else {
 						photo = &telebot.Photo{File: telebot.FromDisk(photoPath)}
@@ -141,7 +154,7 @@ func main() {
 	})
 
 	b.Handle(telebot.OnQuery, func(q *telebot.Query) {
-		sanitizedMsg, sanitized, _, _, err := sanitizeURL(q.Text)
+		sanitizedMsg, sanitized, _, _, _, err := sanitizeURL(q.Text)
 		if err != nil {
 			log.Println(err)
 			return
@@ -174,13 +187,14 @@ func getUsername(sender *telebot.User) string {
 	return sender.Username
 }
 
-func sanitizeURL(text string) (string, bool, bool, []string, error) {
+func sanitizeURL(text string) (string, bool, bool, []string, []string, error) {
 	// Split text into paragraphs first
 	paragraphs := strings.Split(text, "\n")
 	var sanitizedParagraphs []string
 	var sanitized bool
 	var isPhotoURL bool
 	var photoURLs []string
+	var originalURLs []string
 
 	for _, paragraph := range paragraphs {
 		if paragraph == "" {
@@ -193,6 +207,7 @@ func sanitizeURL(text string) (string, bool, bool, []string, error) {
 
 		for _, word := range words {
 			if containsURL(word) {
+				originalURLs = append(originalURLs, word) // Store the original URL
 				parsedURL, err := url.Parse(word)
 				if err != nil {
 					sanitizedWords = append(sanitizedWords, word)
@@ -202,11 +217,11 @@ func sanitizeURL(text string) (string, bool, bool, []string, error) {
 				if parsedURL.Host == "vm.tiktok.com" || parsedURL.Host == "tiktok.com" {
 					word, err = ExpandUrl(word)
 					if err != nil {
-						return "", false, false, nil, err
+						return "", false, false, nil, nil, err
 					}
 					parsedURL, err = url.Parse(word)
 					if err != nil {
-						return "", false, false, nil, err
+						return "", false, false, nil, nil, err
 					}
 				}
 
@@ -452,7 +467,7 @@ func sanitizeURL(text string) (string, bool, bool, []string, error) {
 		sanitizedParagraphs = append(sanitizedParagraphs, strings.Join(sanitizedWords, " "))
 	}
 
-	return strings.Join(sanitizedParagraphs, "\n"), sanitized, isPhotoURL, photoURLs, nil
+	return strings.Join(sanitizedParagraphs, "\n"), sanitized, isPhotoURL, photoURLs, originalURLs, nil
 }
 
 func containsURL(text string) bool {
@@ -565,4 +580,16 @@ func fetchTikTokPhotos(photoURL string) ([]string, error) {
 	}
 
 	return localPaths, nil
+}
+
+func createURLButtons(urls []string) [][]telebot.InlineButton {
+	var rows [][]telebot.InlineButton
+	for i, url := range urls {
+		button := telebot.InlineButton{
+			Text: fmt.Sprintf("Original Link #%d", i+1),
+			URL:  url,
+		}
+		rows = append(rows, []telebot.InlineButton{button})
+	}
+	return rows
 }
