@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	telebot "gopkg.in/tucnak/telebot.v2"
+	tele "gopkg.in/telebot.v4"
 )
 
 // TikwmResponse represents the JSON response from tikwm.com API
@@ -58,72 +58,76 @@ func main() {
 		return
 	}
 
-	b, err := telebot.NewBot(telebot.Settings{
+	// Bot initialization for v4
+	pref := tele.Settings{
 		Token:  tokenStr,
-		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
-	})
+		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+	}
+
+	b, err := tele.NewBot(pref)
 
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
-	b.Handle(telebot.OnText, func(m *telebot.Message) {
-		username := getUsername(m.Sender)
+	b.Handle(tele.OnText, func(c tele.Context) error {
+		username := getUsername(c.Sender())
 
-		if strings.Contains(m.Text, "nocut") {
-			return
+		if strings.Contains(c.Text(), "nocut") {
+			return nil
 		}
 
-		sanitizedMsg, sanitized, isPhotoURL, photoURLs, originalURLs, err := sanitizeURL(m.Text)
+		sanitizedMsg, sanitized, isPhotoURL, photoURLs, originalURLs, err := sanitizeURL(c.Text())
 		if err != nil {
 			log.Println(err)
-			return
+			return err
 		}
 
 		if sanitized {
 			// Create send options with reply if original was a reply
-			sendOpts := &telebot.SendOptions{
-				ParseMode: telebot.ModeMarkdown,
+			sendOpts := &tele.SendOptions{
+				ParseMode: tele.ModeMarkdown,
 			}
-			if m.IsReply() {
-				sendOpts.ReplyTo = m.ReplyTo
+			if c.Message().IsReply() {
+				sendOpts.ReplyTo = c.Message().ReplyTo
 			}
 
 			if isPhotoURL && len(photoURLs) > 0 {
 				// Create URL buttons for photo albums
 				if len(originalURLs) > 0 {
 					buttons := createURLButtons(originalURLs)
-					sendOpts.ReplyMarkup = &telebot.ReplyMarkup{InlineKeyboard: buttons}
+					sendOpts.ReplyMarkup = &tele.ReplyMarkup{InlineKeyboard: buttons}
 				}
 
 				// Create album of photos with caption on first photo
-				album := make(telebot.Album, 0)
+				album := make(tele.Album, 0)
 				for i, photoPath := range photoURLs {
-					var photo *telebot.Photo
+					var photo *tele.Photo
 					if i == 0 {
 						// Get the message text in the default format
 						messageText := ""
 						escapedMsg := escapeMarkdown(sanitizedMsg)
-						if m.FromGroup() && strings.Contains(sanitizedMsg, "anon") {
+						if c.Message().FromGroup() && strings.Contains(sanitizedMsg, "anon") {
 							messageText = strings.Replace(escapedMsg, "anon", "", 1)
 						} else {
 							messageText = "@" + username + " said: " + escapedMsg
 						}
-						photo = &telebot.Photo{
-							File:    telebot.FromDisk(photoPath),
+						photo = &tele.Photo{
+							File:    tele.FromDisk(photoPath),
 							Caption: messageText,
 						}
 					} else {
-						photo = &telebot.Photo{File: telebot.FromDisk(photoPath)}
+						photo = &tele.Photo{File: tele.FromDisk(photoPath)}
 					}
 					album = append(album, photo)
 				}
 
 				// Send the album with reply and buttons
-				_, err := b.SendAlbum(m.Chat, album, sendOpts)
+				_, err := b.SendAlbum(c.Chat(), album, sendOpts)
 				if err != nil {
 					log.Printf("Failed to send album: %v", err)
+					return err
 				}
 
 				// Clean up the cached images
@@ -134,59 +138,63 @@ func main() {
 				// Create URL buttons for regular messages
 				if len(originalURLs) > 0 {
 					buttons := createURLButtons(originalURLs)
-					sendOpts.ReplyMarkup = &telebot.ReplyMarkup{InlineKeyboard: buttons}
+					sendOpts.ReplyMarkup = &tele.ReplyMarkup{InlineKeyboard: buttons}
 				}
 
 				var err error
 				// Escape any Markdown special characters in the sanitized URL
 				escapedMsg := escapeMarkdown(sanitizedMsg)
 
-				if m.FromGroup() && strings.Contains(sanitizedMsg, "anon") {
-					_, err = b.Send(m.Chat, strings.Replace(escapedMsg, "anon", "", 1), sendOpts)
+				if c.Message().FromGroup() && strings.Contains(sanitizedMsg, "anon") {
+					_, err = b.Send(c.Chat(), strings.Replace(escapedMsg, "anon", "", 1), sendOpts)
 				} else {
-					_, err = b.Send(m.Chat, "@"+username+" said: "+escapedMsg, sendOpts)
+					_, err = b.Send(c.Chat(), "@"+username+" said: "+escapedMsg, sendOpts)
 				}
 				if err != nil {
 					log.Printf("Failed to send message: %v", err)
-					return
+					return err
 				}
 			}
 
 			// Only try to delete the original message if we successfully sent the new one
-			if err := b.Delete(m); err != nil {
+			if err := b.Delete(c.Message()); err != nil {
 				log.Printf("Failed to delete original message: %v", err)
+				return err
 			}
 		}
+		return nil
 	})
 
-	b.Handle(telebot.OnQuery, func(q *telebot.Query) {
-		sanitizedMsg, sanitized, _, _, _, err := sanitizeURL(q.Text)
+	b.Handle(tele.OnQuery, func(c tele.Context) error {
+		sanitizedMsg, sanitized, _, _, _, err := sanitizeURL(c.Query().Text)
 		if err != nil {
 			log.Println(err)
-			return
+			return err
 		}
 
 		if sanitized {
-			result := &telebot.ArticleResult{
+			result := &tele.ArticleResult{
 				Title: "Sanitized URL",
 				Text:  sanitizedMsg,
 			}
 			result.SetResultID("1")
-			results := []telebot.Result{result}
-			err = b.Answer(q, &telebot.QueryResponse{
+			results := []tele.Result{result}
+			err = b.Answer(c.Query(), &tele.QueryResponse{
 				Results: results,
 			})
 			if err != nil {
 				log.Println(err)
+				return err
 			}
 		}
+		return nil
 	})
 
 	log.Println("starting bot")
 	b.Start()
 }
 
-func getUsername(sender *telebot.User) string {
+func getUsername(sender *tele.User) string {
 	if sender.Username == "" {
 		return sender.FirstName
 	}
@@ -435,14 +443,14 @@ func fetchTikTokPhotos(photoURL string) ([]string, error) {
 	return localPaths, nil
 }
 
-func createURLButtons(urls []string) [][]telebot.InlineButton {
-	var rows [][]telebot.InlineButton
+func createURLButtons(urls []string) [][]tele.InlineButton {
+	var rows [][]tele.InlineButton
 	for i, url := range urls {
-		button := telebot.InlineButton{
+		button := tele.InlineButton{
 			Text: fmt.Sprintf("Original Link #%d", i+1),
 			URL:  url,
 		}
-		rows = append(rows, []telebot.InlineButton{button})
+		rows = append(rows, []tele.InlineButton{button})
 	}
 	return rows
 }
