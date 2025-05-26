@@ -414,11 +414,13 @@ func sanitizeURL(text string) (string, bool, bool, []string, error) {
 						parsedURL.Path = "/" + pathSegments[1]
 						sanitized = true
 					}
-					// Only rewrite to ddinstagram if path includes "reel"
-					if strings.Contains(parsedURL.Path, "reel") {
-						parsedURL.Host = "ddinstagram.com"
-						sanitized = true
-					}
+
+				// Only rewrite to ddinstagram if path includes "/reel/" or "/p/"
+				if strings.Contains(parsedURL.Path, "/reel/") || strings.Contains(parsedURL.Path, "/p/") {
+					parsedURL.Host = "ddinstagram.com"
+					sanitized = true
+				}
+
 				}
 
 				sanitizedWords = append(sanitizedWords, parsedURL.String())
