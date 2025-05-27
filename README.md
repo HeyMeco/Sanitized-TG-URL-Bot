@@ -1,6 +1,6 @@
 [![Build and Upload Artifacts](https://github.com/HeyMeco/Sanitized-TG-URL-Bot/actions/workflows/go.yml/badge.svg)](https://github.com/HeyMeco/Sanitized-TG-URL-Bot/actions/workflows/go.yml)
 # Sanitized-TG-URL-Bot
-Telegram bot written in Go which sanitizes URL Queries and adds x.com / tiktok links OpenGraph meta tags
+Telegram bot written in Go which sanitizes URL Queries and adds x.com / tiktok / IG links OpenGraph meta tags
 
 Add it to your Groupchat or use it private here: [@sanitizeurlbot](https://t.me/sanitizeurlbot)
 
