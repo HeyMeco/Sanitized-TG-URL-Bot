@@ -318,7 +318,7 @@ func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTok
 			}
 
 			// --- TikTok URL Expansion ---
-			if parsedURL.Host == tiktokShortHost || (parsedURL.Host == tiktokHost && !strings.Contains(parsedURL.Path, "/t/")) {
+			if parsedURL.Host == tiktokShortHost || parsedURL.Host == tiktokHost {
 				expandedURLStr, expandErr := ExpandUrl(parsedURL.String()) // Uses global httpClient
 				if expandErr != nil {
 					log.Printf("Warning: Failed to expand TikTok URL '%s': %v. Proceeding with unexpanded.", parsedURL.String(), expandErr)
@@ -386,7 +386,7 @@ func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTok
 				// --- Special Domain Replacements ---
 				if strings.HasSuffix(parsedURL.Host, tiktokHostSuffix) { // TikTok non-photo/live
 					if !strings.Contains(parsedURL.Path, tiktokPhotoPathSegment) && !strings.Contains(parsedURL.Path, tiktokLivePathSegment) {
-						if parsedURL.Host != tiktokCleanHost {
+						if parsedURL.Host != tiktokCleanHost && strings.Contains(parsedURL.Path, "/video/") {
 							parsedURL.Host = tiktokCleanHost
 							processedWord = parsedURL.String()
 							currentWordSanitized = true
