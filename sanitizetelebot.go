@@ -1,7 +1,7 @@
-// v2 uses the rules from https://github.com/Vendicated/Vencord/tree/main/src/plugins/clearURLs so credits to them
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tele "gopkg.in/telebot.v4"
@@ -25,310 +26,420 @@ type TikwmResponse struct {
 	Data Data   `json:"data"`
 }
 
+// Data holds the actual data from TikwmResponse
 type Data struct {
 	Images []string `json:"images"`
 }
 
+// Global HTTP client for making external requests with a timeout.
+var httpClient = &http.Client{
+	Timeout: 20 * time.Second, // Adjusted for potentially slow operations like multiple image downloads
+}
+
+// Constants for various strings and configurations
+const (
+	telegramTokenEnvVar = "TELEGRAM_BOT_TOKEN"
+	tokenFileName       = "token.txt"
+	imageCacheDir       = "image_cache"
+
+	tiktokShortHost        = "vm.tiktok.com"
+	tiktokHost             = "tiktok.com"
+	tiktokHostSuffix       = "tiktok.com" // Used with strings.HasSuffix
+	tiktokPhotoPathSegment = "/photo/"
+	tiktokLivePathSegment  = "/live"
+	tiktokCleanHost        = "vm.dstn.to"
+
+	xComHost   = "x.com"
+	fixupXHost = "fixupx.com"
+
+	instagramHostSuffix         = "instagram.com"
+	instagramProfileCardSegment = "profilecard" // Path segment: /username/profilecard
+	instagramReelPathSegment    = "/reel/"
+	instagramPostPathSegment    = "/p/"
+	ddInstagramHost             = "d.ddinstagram.com"
+
+	msgMarkerAnon        = "anon"
+	msgMarkerNoCut       = "nocut"
+	inlineQueryDefaultID = "clearurl_result_1" // More specific ID
+)
+
+// markdownEscaper is a reusable strings.Replacer for escaping Markdown characters.
+var markdownEscaper = strings.NewReplacer(
+	"[", "\\[", "]", "\\]",
+	"_", "\\_", "*", "\\*",
+	"`", "\\`",
+)
+
 func main() {
-	var tokenStr string
-
-	// Check for environment variable first
-	tokenStr = os.Getenv("TELEGRAM_BOT_TOKEN")
-
-	// If environment variable is empty, try to read from file
+	tokenStr := loadTelegramToken()
 	if tokenStr == "" {
-		file, err := os.Open("token.txt")
-		if err != nil {
-			log.Fatal("Error: token.txt is missing or if run as a docker image, the TELEGRAM_BOT_TOKEN environment variable is missing")
-			return
-		}
-		defer file.Close()
-
-		token, err := io.ReadAll(file)
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-		// Trim the newline character from the token string
-		tokenStr = strings.TrimSpace(string(token))
+		log.Fatal("Error: Telegram bot token is empty or could not be loaded. Please provide a valid token via TELEGRAM_BOT_TOKEN env var or token.txt file.")
 	}
 
-	if tokenStr == "" {
-		log.Fatal("Error: Telegram bot token is empty. Please provide a valid token.")
-		return
-	}
-
-	// Bot initialization for v4
 	pref := tele.Settings{
 		Token:  tokenStr,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
 	}
 
 	b, err := tele.NewBot(pref)
-
 	if err != nil {
-		log.Fatal(err)
-		return
+		log.Fatalf("Failed to create bot: %v", err)
 	}
 
 	b.Handle(tele.OnText, func(c tele.Context) error {
-		username := getUsername(c.Sender())
-
-		if strings.Contains(c.Text(), "nocut") {
-			return nil
-		}
-
-		sanitizedMsg, sanitized, isPhotoURL, photoURLs, originalURLs, err := sanitizeURL(c.Text())
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
-		if sanitized {
-			// Create send options with reply if original was a reply
-			sendOpts := &tele.SendOptions{
-				ParseMode: tele.ModeMarkdown,
-			}
-			if c.Message().IsReply() {
-				sendOpts.ReplyTo = c.Message().ReplyTo
-			}
-
-			if isPhotoURL && len(photoURLs) > 0 {
-				// Create URL buttons for photo albums
-				if len(originalURLs) > 0 {
-					buttons := createURLButtons(originalURLs)
-					sendOpts.ReplyMarkup = &tele.ReplyMarkup{InlineKeyboard: buttons}
-				}
-
-				// Create album of photos with caption on first photo
-				album := make(tele.Album, 0)
-				for i, photoPath := range photoURLs {
-					var photo *tele.Photo
-					if i == 0 {
-						// Get the message text in the default format
-						messageText := ""
-						escapedMsg := escapeMarkdown(sanitizedMsg)
-						if c.Message().FromGroup() && strings.Contains(sanitizedMsg, "anon") {
-							messageText = strings.Replace(escapedMsg, "anon", "", 1)
-						} else {
-							messageText = "@" + username + " said: " + escapedMsg
-						}
-						photo = &tele.Photo{
-							File:    tele.FromDisk(photoPath),
-							Caption: messageText,
-						}
-					} else {
-						photo = &tele.Photo{File: tele.FromDisk(photoPath)}
-					}
-					album = append(album, photo)
-				}
-
-				// Send the album with reply and buttons
-				_, err := b.SendAlbum(c.Chat(), album, sendOpts)
-				if err != nil {
-					log.Printf("Failed to send album: %v", err)
-					return err
-				}
-
-				// Clean up the cached images
-				for _, photoPath := range photoURLs {
-					os.Remove(photoPath)
-				}
-			} else {
-				// Create URL buttons for regular messages
-				if len(originalURLs) > 0 {
-					buttons := createURLButtons(originalURLs)
-					sendOpts.ReplyMarkup = &tele.ReplyMarkup{InlineKeyboard: buttons}
-				}
-
-				var err error
-				// Escape any Markdown special characters in the sanitized URL
-				escapedMsg := escapeMarkdown(sanitizedMsg)
-
-				if c.Message().FromGroup() && strings.Contains(sanitizedMsg, "anon") {
-					_, err = b.Send(c.Chat(), strings.Replace(escapedMsg, "anon", "", 1), sendOpts)
-				} else {
-					_, err = b.Send(c.Chat(), "@"+username+" said: "+escapedMsg, sendOpts)
-				}
-				if err != nil {
-					log.Printf("Failed to send message: %v", err)
-					return err
-				}
-			}
-
-			// Only try to delete the original message if we successfully sent the new one
-			if err := b.Delete(c.Message()); err != nil {
-				log.Printf("Failed to delete original message: %v", err)
-				return err
-			}
-		}
-		return nil
+		return handleTextMessage(c, b)
 	})
 
 	b.Handle(tele.OnQuery, func(c tele.Context) error {
-		sanitizedMsg, sanitized, _, _, _, err := sanitizeURL(c.Query().Text)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
-		if sanitized {
-			result := &tele.ArticleResult{
-				Title: "Sanitized URL",
-				Text:  sanitizedMsg,
-			}
-			result.SetResultID("1")
-			results := []tele.Result{result}
-			err = b.Answer(c.Query(), &tele.QueryResponse{
-				Results: results,
-			})
-			if err != nil {
-				log.Println(err)
-				return err
-			}
-		}
-		return nil
+		return handleInlineQuery(c, b)
 	})
 
-	log.Println("starting bot")
+	log.Println("Bot is starting...")
 	b.Start()
 }
 
-func getUsername(sender *tele.User) string {
-	if sender.Username == "" {
-		return sender.FirstName
+func loadTelegramToken() string {
+	tokenStr := os.Getenv(telegramTokenEnvVar)
+	if tokenStr != "" {
+		log.Println("Loaded Telegram token from environment variable.")
+		return tokenStr
 	}
-	return sender.Username
+
+	file, err := os.Open(tokenFileName)
+	if err != nil {
+		log.Printf("Warning: %s not found (%v). Checking env var was the only option if this fails.", tokenFileName, err)
+		return ""
+	}
+	defer file.Close()
+
+	tokenBytes, err := io.ReadAll(file)
+	if err != nil {
+		log.Printf("Warning: Failed to read %s: %v", tokenFileName, err)
+		return ""
+	}
+	log.Printf("Loaded Telegram token from %s.", tokenFileName)
+	return strings.TrimSpace(string(tokenBytes))
 }
 
-func sanitizeURL(text string) (string, bool, bool, []string, []string, error) {
-	// Split text into paragraphs first
-	paragraphs := strings.Split(text, "\n")
-	var sanitizedParagraphs []string
-	var sanitized bool
-	var isPhotoURL bool
-	var photoURLs []string
-	var originalURLs []string
+func handleTextMessage(c tele.Context, b *tele.Bot) error {
+	sender := c.Sender()
+	if sender == nil {
+		log.Println("Warning: Received message without sender information.")
+		return nil // Or handle as an error by returning an error
+	}
+	username := getUsername(sender)
+	messageText := c.Text()
 
-	for _, paragraph := range paragraphs {
-		if paragraph == "" {
-			sanitizedParagraphs = append(sanitizedParagraphs, "")
+	if strings.Contains(messageText, msgMarkerNoCut) {
+		return nil // "nocut" keyword present, do nothing.
+	}
+
+	sanitizedMsg, wasSanitized, isTikTokPhotoAlbum, downloadedPhotoPaths, originalURLs, err := sanitizeURL(messageText)
+	if err != nil {
+		log.Printf("Error sanitizing URL for text from user %s ('%s'): %v", username, messageText, err)
+		// Notify user about the error, optionally.
+		// c.Reply("Sorry, I couldn't process your message due to an internal error.")
+		return err // Propagate error to telebot library, it might log it or handle it.
+	}
+
+	if !wasSanitized {
+		return nil // No URLs were changed or special actions taken.
+	}
+
+	sendOpts := &tele.SendOptions{ParseMode: tele.ModeMarkdown}
+	if c.Message().IsReply() && c.Message().ReplyTo != nil {
+		sendOpts.ReplyTo = c.Message().ReplyTo
+	}
+
+	if len(originalURLs) > 0 {
+		buttons := createURLButtons(originalURLs)
+		sendOpts.ReplyMarkup = &tele.ReplyMarkup{InlineKeyboard: buttons}
+	}
+
+	var sendErr error
+	if isTikTokPhotoAlbum && len(downloadedPhotoPaths) > 0 {
+		// Define the maximum number of photos per message
+		const maxPhotosPerMessage = 10
+
+		// Prepare the base caption text
+		var baseCaption string
+		if c.Message().FromGroup() && strings.Contains(sanitizedMsg, msgMarkerAnon) {
+			baseCaption = strings.Replace(sanitizedMsg, msgMarkerAnon, "", 1)
+		} else {
+			baseCaption = "@" + username + " said: " + sanitizedMsg
+		}
+
+		// Calculate total number of parts
+		totalParts := (len(downloadedPhotoPaths) + maxPhotosPerMessage - 1) / maxPhotosPerMessage
+
+		// Split photos into groups of 10
+		for i := 0; i < len(downloadedPhotoPaths); i += maxPhotosPerMessage {
+			end := i + maxPhotosPerMessage
+			if end > len(downloadedPhotoPaths) {
+				end = len(downloadedPhotoPaths)
+			}
+
+			// Create album for this batch
+			album := make(tele.Album, 0, maxPhotosPerMessage)
+			for j, photoPath := range downloadedPhotoPaths[i:end] {
+				photo := &tele.Photo{File: tele.FromDisk(photoPath)}
+				if j == 0 { // Add caption to first photo of each album
+					partNum := (i / maxPhotosPerMessage) + 1
+					captionText := baseCaption
+					if partNum > 1 { // Add part number for all parts except the first
+						captionText = fmt.Sprintf("%s (Part %d/%d)", baseCaption, partNum, totalParts)
+					} else if totalParts > 1 { // For first part, only add number if there are multiple parts
+						captionText = fmt.Sprintf("%s (Part 1/%d)", baseCaption, totalParts)
+					}
+					photo.Caption = escapeMarkdown(captionText)
+				}
+				album = append(album, photo)
+			}
+
+			// Send this batch
+			_, batchErr := b.SendAlbum(c.Chat(), album, sendOpts)
+			if batchErr != nil {
+				sendErr = fmt.Errorf("failed to send photo batch %d-%d: %w", i+1, end, batchErr)
+				break // Stop sending more batches if one fails
+			}
+		}
+
+		// Clean up downloaded images after attempting to send all batches
+		for _, photoPath := range downloadedPhotoPaths {
+			if rmErr := os.Remove(photoPath); rmErr != nil {
+				log.Printf("Failed to remove cached image %s: %v", photoPath, rmErr)
+			}
+		}
+	} else {
+		var messageToSend string
+		if c.Message().FromGroup() && strings.Contains(sanitizedMsg, msgMarkerAnon) { // Check original sanitizedMsg for "anon"
+			messageToSend = strings.Replace(sanitizedMsg, msgMarkerAnon, "", 1)
+		} else {
+			messageToSend = "@" + username + " said: " + sanitizedMsg
+		}
+		_, sendErr = b.Send(c.Chat(), escapeMarkdown(messageToSend), sendOpts)
+	}
+
+	if sendErr != nil {
+		log.Printf("Failed to send sanitized message to chat %d: %v", c.Chat().ID, sendErr)
+		return sendErr
+	}
+
+	// Successfully sent the new message, now delete the original.
+	if err := b.Delete(c.Message()); err != nil {
+		log.Printf("Failed to delete original message (ID: %d, ChatID: %d): %v", c.Message().ID, c.Chat().ID, err)
+		// Not returning this error as critical because the main operation (sending sanitized message) succeeded.
+	}
+	return nil
+}
+
+func handleInlineQuery(c tele.Context, b *tele.Bot) error {
+	queryText := c.Query().Text
+	sanitizedMsg, wasSanitized, _, _, _, err := sanitizeURL(queryText)
+	if err != nil {
+		log.Printf("Error sanitizing URL for inline query '%s': %v", queryText, err)
+		return err
+	}
+
+	if wasSanitized {
+		result := &tele.ArticleResult{
+			Title:       "Sanitized URL",                // Could be more dynamic, e.g., show the cleaned URL snippet
+			Text:        sanitizedMsg,                   // This is MessageText, which is sent when user selects the result
+			Description: "Tap to send the cleaned URL.", // Shown in the results list
+		}
+		result.SetResultID(inlineQueryDefaultID) // ID should be unique if you plan to have multiple results
+
+		results := []tele.Result{result}
+		resp := &tele.QueryResponse{
+			Results:   results,
+			CacheTime: 60, // Optional: How long (in seconds) the Telegram client should cache this result.
+		}
+
+		if err := b.Answer(c.Query(), resp); err != nil {
+			log.Printf("Failed to answer inline query for query ID %s: %v", c.Query().ID, err)
+			return err
+		}
+	}
+	// If not sanitized, bot sends no results, which is fine.
+	return nil
+}
+
+func getUsername(sender *tele.User) string {
+	if sender.Username != "" {
+		return sender.Username
+	}
+	return sender.FirstName // Fallback to FirstName if username is not set
+}
+
+func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTokPhotoAlbum bool, downloadedPhotoPaths []string, originalURLs []string, err error) {
+	var sb strings.Builder
+	sb.Grow(len(text) + 64) // Pre-allocate: original length + buffer for prefixes/changes
+
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	isFirstParagraph := true
+
+	for scanner.Scan() {
+		paragraph := scanner.Text()
+		if !isFirstParagraph {
+			sb.WriteByte('\n')
+		}
+		isFirstParagraph = false
+
+		if strings.TrimSpace(paragraph) == "" { // Preserve empty lines by only writing \n if it's not the first
+			if !isFirstParagraph { // if it was truly an empty line after a non-empty one
+				// sb.WriteByte('\n') // Already handled by the start of loop logic
+			}
 			continue
 		}
 
 		words := strings.Fields(paragraph)
-		var sanitizedWords []string
+		isFirstWordInParagraph := true
 
 		for _, word := range words {
-			if containsURL(word) {
-				originalURLs = append(originalURLs, word) // Store the original URL
-				parsedURL, err := url.Parse(word)
-				if err != nil {
-					sanitizedWords = append(sanitizedWords, word)
-					continue
-				}
+			if !isFirstWordInParagraph {
+				sb.WriteByte(' ')
+			}
+			isFirstWordInParagraph = false
 
-				if parsedURL.Host == "vm.tiktok.com" || parsedURL.Host == "tiktok.com" {
-					word, err = ExpandUrl(word)
-					if err != nil {
-						return "", false, false, nil, nil, err
-					}
-					parsedURL, err = url.Parse(word)
-					if err != nil {
-						return "", false, false, nil, nil, err
-					}
-				}
+			if !containsURL(word) {
+				sb.WriteString(word)
+				continue
+			}
 
-				// Check if it's a TikTok photo URL
-				if strings.HasSuffix(parsedURL.Host, "tiktok.com") && strings.Contains(parsedURL.Path, "/photo/") {
-					isPhotoURL = true
-					photos, err := fetchTikTokPhotos(parsedURL.String())
-					if err != nil {
-						log.Printf("Failed to fetch TikTok photos: %v", err)
+			originalURLs = append(originalURLs, word)
+			currentWordSanitized := false
+			processedWord := word
+
+			parsedURL, parseErr := url.Parse(word)
+			if parseErr != nil {
+				log.Printf("Warning: Failed to parse URL '%s': %v. Using original.", word, parseErr)
+				sb.WriteString(word)
+				continue
+			}
+
+			// --- TikTok URL Expansion ---
+			if parsedURL.Host == tiktokShortHost || (parsedURL.Host == tiktokHost && !strings.Contains(parsedURL.Path, "/t/")) {
+				expandedURLStr, expandErr := ExpandUrl(parsedURL.String()) // Uses global httpClient
+				if expandErr != nil {
+					log.Printf("Warning: Failed to expand TikTok URL '%s': %v. Proceeding with unexpanded.", parsedURL.String(), expandErr)
+				} else {
+					expandedParsedURL, parseExpandedErr := url.Parse(expandedURLStr)
+					if parseExpandedErr != nil {
+						log.Printf("Warning: Failed to parse expanded TikTok URL '%s': %v. Proceeding with unexpanded original.", expandedURLStr, parseExpandedErr)
 					} else {
-						photoURLs = photos
+						if parsedURL.String() != expandedParsedURL.String() { // If expansion changed the URL
+							currentWordSanitized = true
+						}
+						parsedURL = expandedParsedURL
+						processedWord = parsedURL.String()
 					}
-					// Remove all query parameters from TikTok photo URLs
-					parsedURL.RawQuery = ""
-					sanitizedWords = append(sanitizedWords, parsedURL.String())
-					sanitized = true
-					continue
+				}
+			}
+
+			// --- TikTok Photo Album Processing (after potential expansion) ---
+			if strings.HasSuffix(parsedURL.Host, tiktokHostSuffix) && strings.Contains(parsedURL.Path, tiktokPhotoPathSegment) {
+				isTikTokPhotoAlbum = true                                         // Mark that this type of URL was encountered
+				tempPhotoPaths, fetchErr := fetchTikTokPhotos(parsedURL.String()) // Uses global httpClient
+				if fetchErr != nil {
+					log.Printf("Warning: Failed to fetch TikTok photos for '%s': %v. URL params will be cleaned, but no album.", parsedURL.String(), fetchErr)
+					isTikTokPhotoAlbum = false // Reset if fetching fails, it's not an album then
+				} else {
+					downloadedPhotoPaths = append(downloadedPhotoPaths, tempPhotoPaths...)
 				}
 
-				// Use universal rules from rules.go
-
-				// Clean universal parameters
+				if parsedURL.RawQuery != "" { // Always remove query params for TikTok photo URLs
+					parsedURL.RawQuery = ""
+					currentWordSanitized = true
+				}
+				processedWord = parsedURL.String()
+			} else {
+				// --- General Parameter Cleaning and Host Replacements (for non-TikTok photo URLs) ---
 				q := parsedURL.Query()
-				for param := range q {
-					for _, rule := range URLRules {
-						if strings.HasPrefix(param, rule) {
-							q.Del(param)
-							sanitized = true
+				paramsModified := false
+
+				for paramName := range q { // Universal rules
+					for _, rulePrefix := range URLRules {
+						if strings.HasPrefix(paramName, rulePrefix) {
+							q.Del(paramName)
+							paramsModified = true
 						}
 					}
 				}
-
-				// Clean host-specific parameters
-				for host, rules := range DomainRules {
-					if strings.Contains(parsedURL.Host, host) {
-						for param := range q {
-							for _, rule := range rules {
-								if strings.HasPrefix(param, rule) {
-									q.Del(param)
-									sanitized = true
+				for domainKey, rulePrefixes := range DomainRules { // Domain-specific rules
+					if strings.Contains(parsedURL.Host, domainKey) { // `domainKey` could be "amazon" matching "amazon.co.uk"
+						for paramName := range q {
+							for _, rulePrefix := range rulePrefixes {
+								if strings.HasPrefix(paramName, rulePrefix) {
+									q.Del(paramName)
+									paramsModified = true
 								}
 							}
 						}
 					}
 				}
+				if paramsModified {
+					parsedURL.RawQuery = q.Encode()
+					processedWord = parsedURL.String()
+					currentWordSanitized = true
+				}
 
-				// Update URL with cleaned parameters
-				parsedURL.RawQuery = q.Encode()
-
-				// Handle special domain replacements
-				if strings.HasSuffix(parsedURL.Host, "tiktok.com") {
-					// Check if the expanded URL contains "/photo/" or "/live"
-					if !strings.Contains(parsedURL.Path, "/photo/") && !strings.Contains(parsedURL.Path, "/live") {
-						parsedURL.Host = "vm.dstn.to"
-						sanitized = true
+				// --- Special Domain Replacements ---
+				if strings.HasSuffix(parsedURL.Host, tiktokHostSuffix) { // TikTok non-photo/live
+					if !strings.Contains(parsedURL.Path, tiktokPhotoPathSegment) && !strings.Contains(parsedURL.Path, tiktokLivePathSegment) {
+						if parsedURL.Host != tiktokCleanHost {
+							parsedURL.Host = tiktokCleanHost
+							processedWord = parsedURL.String()
+							currentWordSanitized = true
+						}
 					}
-					// Remove query parameters if the path contains "/live"
-					if strings.Contains(parsedURL.Path, "/live") {
+					if strings.Contains(parsedURL.Path, tiktokLivePathSegment) && parsedURL.RawQuery != "" { // TikTok Live
 						parsedURL.RawQuery = ""
-						sanitized = true
+						processedWord = parsedURL.String()
+						currentWordSanitized = true
 					}
 				}
-				if parsedURL.Host == "x.com" {
-					parsedURL.Host = "fixupx.com"
-					sanitized = true
+				if parsedURL.Host == xComHost && parsedURL.Host != fixupXHost { // X.com
+					parsedURL.Host = fixupXHost
+					processedWord = parsedURL.String()
+					currentWordSanitized = true
 				}
-				if strings.HasSuffix(parsedURL.Host, "instagram.com") {
-					// Logic to remove "profilecard" path as those result in an error page without share id
+				if strings.HasSuffix(parsedURL.Host, instagramHostSuffix) { // Instagram
 					pathSegments := strings.Split(parsedURL.Path, "/")
-					if len(pathSegments) > 2 && pathSegments[2] == "profilecard" {
-						// Reconstruct the path without the "profilecard" segment
-						parsedURL.Path = "/" + pathSegments[1]
-						sanitized = true
+					if len(pathSegments) > 2 && pathSegments[2] == instagramProfileCardSegment { // /username/profilecard/...
+						parsedURL.Path = "/" + pathSegments[1] // Becomes /username
+						processedWord = parsedURL.String()
+						currentWordSanitized = true
 					}
-
-					// Only rewrite to ddinstagram if path includes "/reel/" or "/p/"
-					if strings.Contains(parsedURL.Path, "/reel/") || strings.Contains(parsedURL.Path, "/p/") {
-						parsedURL.Host = "d.ddinstagram.com"
-						sanitized = true
+					if strings.Contains(parsedURL.Path, instagramReelPathSegment) || strings.Contains(parsedURL.Path, instagramPostPathSegment) {
+						if parsedURL.Host != ddInstagramHost {
+							parsedURL.Host = ddInstagramHost
+							processedWord = parsedURL.String()
+							currentWordSanitized = true
+						}
 					}
-
 				}
-
-				sanitizedWords = append(sanitizedWords, parsedURL.String())
-			} else {
-				sanitizedWords = append(sanitizedWords, word)
+			}
+			sb.WriteString(processedWord)
+			if currentWordSanitized {
+				wasSanitized = true
 			}
 		}
-
-		sanitizedParagraphs = append(sanitizedParagraphs, strings.Join(sanitizedWords, " "))
 	}
 
-	return strings.Join(sanitizedParagraphs, "\n"), sanitized, isPhotoURL, photoURLs, originalURLs, nil
+	if scanErr := scanner.Err(); scanErr != nil {
+		return "", false, false, nil, nil, fmt.Errorf("error scanning input text: %w", scanErr)
+	}
+
+	// If it was marked as a TikTok photo album opportunity AND photos were actually downloaded,
+	// then it counts as "sanitized" (because an action is taken).
+	if isTikTokPhotoAlbum && len(downloadedPhotoPaths) > 0 {
+		wasSanitized = true
+	} else {
+		// If photo download failed, ensure isTikTokPhotoAlbum is false so it's not treated as an album.
+		isTikTokPhotoAlbum = false
+	}
+
+	return sb.String(), wasSanitized, isTikTokPhotoAlbum, downloadedPhotoPaths, originalURLs, nil
 }
 
 func containsURL(text string) bool {
@@ -336,121 +447,178 @@ func containsURL(text string) bool {
 }
 
 func ExpandUrl(shortURL string) (string, error) {
-	resp, err := http.Head(shortURL)
+	req, err := http.NewRequest("HEAD", shortURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create HEAD request for %s: %w", shortURL, err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("received non-200 status code")
+	// req.Header.Set("User-Agent", "Mozilla/5.0...") // Optional: Set User-Agent if needed
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HEAD request failed for %s: %w", shortURL, err)
+	}
+	defer resp.Body.Close()
+
+	// We are interested in the final URL from resp.Request.URL after redirects.
+	// Default client follows redirects for HEAD.
+	if resp.StatusCode >= http.StatusBadRequest { // 400 and above are generally errors
+		return "", fmt.Errorf("received non-successful status code %d for %s", resp.StatusCode, shortURL)
 	}
 	return resp.Request.URL.String(), nil
 }
 
 func escapeMarkdown(text string) string {
-	text = strings.ReplaceAll(text, "[", "\\[")
-	text = strings.ReplaceAll(text, "]", "\\]")
-	text = strings.ReplaceAll(text, "_", "\\_")
-	text = strings.ReplaceAll(text, "*", "\\*")
-	text = strings.ReplaceAll(text, "`", "\\`")
-	return text
+	return markdownEscaper.Replace(text)
 }
 
 func downloadImage(imageURL string) (string, error) {
-	// Create cache directory if it doesn't exist
-	cacheDir := "image_cache"
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return "", err
+	if err := os.MkdirAll(imageCacheDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create image cache directory %s: %w", imageCacheDir, err)
 	}
 
-	// Create a hash of the URL for a shorter, safe filename
 	hasher := sha256.New()
 	hasher.Write([]byte(imageURL))
-	hashStr := hex.EncodeToString(hasher.Sum(nil))[:16] // Use first 16 chars of hash
+	hashStr := hex.EncodeToString(hasher.Sum(nil))[:16] // Short hash for filename
 
-	// Get the file extension from the URL path
-	parsedURL, err := url.Parse(imageURL)
+	parsedURLForExt, err := url.Parse(imageURL)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse image URL %s for extension: %w", imageURL, err)
 	}
-	ext := filepath.Ext(parsedURL.Path)
+	ext := filepath.Ext(parsedURLForExt.Path)
 	if ext == "" {
-		ext = ".jpg" // Default to .jpg if no extension found
+		ext = ".jpg" // Default extension
 	}
 
-	// Generate filename using timestamp and hash
-	filename := filepath.Join(cacheDir, fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hashStr, ext))
+	filename := filepath.Join(imageCacheDir, fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hashStr, ext))
 
-	// Download the image
-	resp, err := http.Get(imageURL)
+	req, err := http.NewRequest("GET", imageURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create GET request for image %s: %w", imageURL, err)
+	}
+	// req.Header.Set("User-Agent", "...") // Optional: if server requires specific UA
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to start download for %s: %w", imageURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download image: %d", resp.StatusCode)
+		return "", fmt.Errorf("failed to download image %s: status %s", imageURL, resp.Status)
 	}
 
-	// Create the file
 	file, err := os.Create(filename)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create image file %s: %w", filename, err)
 	}
 	defer file.Close()
 
-	// Copy the content
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
-		return "", err
+		_ = os.Remove(filename) // Attempt to clean up partially written file
+		return "", fmt.Errorf("failed to write image data to %s: %w", filename, err)
 	}
-
 	return filename, nil
 }
 
-func fetchTikTokPhotos(photoURL string) ([]string, error) {
-	apiURL := fmt.Sprintf("https://tikwm.com/api?url=%s&hd=1&cursor=0", url.QueryEscape(photoURL))
-
-	resp, err := http.Get(apiURL)
+func fetchTikTokPhotos(photoPostURL string) ([]string, error) {
+	apiURL := fmt.Sprintf("https://tikwm.com/api?url=%s&hd=1&cursor=0", url.QueryEscape(photoPostURL))
+	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request for tikwm API: %w", err)
+	}
+	// req.Header.Set("User-Agent", "...") // Optional: if tikwm API requires it
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("tikwm API request failed for %s: %w", photoPostURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tikwm API returned status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("tikwm API for %s returned status %s", photoPostURL, resp.Status)
 	}
 
 	var tikwmResp TikwmResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tikwmResp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decode tikwm API response for %s: %w", photoPostURL, err)
 	}
 
 	if tikwmResp.Code != 0 {
-		return nil, fmt.Errorf("tikwm API error: %s", tikwmResp.Msg)
+		return nil, fmt.Errorf("tikwm API error for %s (code %d): %s", photoPostURL, tikwmResp.Code, tikwmResp.Msg)
+	}
+	if len(tikwmResp.Data.Images) == 0 {
+		// This can happen if a video link is passed to a photo endpoint, or if the post has no images.
+		return nil, fmt.Errorf("tikwm API returned no images for %s (Code: %d, Msg: %s)", photoPostURL, tikwmResp.Code, tikwmResp.Msg)
 	}
 
-	// Download all images
-	var localPaths []string
-	for _, imgURL := range tikwmResp.Data.Images {
-		localPath, err := downloadImage(imgURL)
-		if err != nil {
-			log.Printf("Failed to download image %s: %v", imgURL, err)
-			continue
+	maxConcurrentDownloads := 10 // Limit concurrency to avoid overwhelming servers/network
+	sem := make(chan struct{}, maxConcurrentDownloads)
+	var wg sync.WaitGroup
+
+	// Using slice of struct to hold path and error together for easier processing
+	type downloadResult struct {
+		path string
+		err  error
+	}
+	results := make([]downloadResult, len(tikwmResp.Data.Images))
+
+	for i, imgURL := range tikwmResp.Data.Images {
+		wg.Add(1)
+		go func(idx int, urlToDownload string) {
+			defer wg.Done()
+			sem <- struct{}{}        // Acquire semaphore
+			defer func() { <-sem }() // Release semaphore
+
+			localPath, downloadErr := downloadImage(urlToDownload)
+			results[idx] = downloadResult{path: localPath, err: downloadErr}
+			if downloadErr != nil {
+				log.Printf("Failed to download TikTok image %s (source: %s): %v", urlToDownload, photoPostURL, downloadErr)
+			}
+		}(i, imgURL)
+	}
+	wg.Wait()
+
+	successfulPaths := make([]string, 0, len(tikwmResp.Data.Images))
+	var firstErr error
+	for _, res := range results {
+		if res.err == nil && res.path != "" {
+			successfulPaths = append(successfulPaths, res.path)
+		} else if res.err != nil && firstErr == nil {
+			firstErr = res.err // Capture the first download error encountered
 		}
-		localPaths = append(localPaths, localPath)
 	}
 
-	return localPaths, nil
+	if len(successfulPaths) == 0 {
+		if firstErr != nil {
+			return nil, fmt.Errorf("all image downloads failed for %s; first error: %w", photoPostURL, firstErr)
+		}
+		return nil, fmt.Errorf("no images were successfully downloaded for %s, though API indicated images were present", photoPostURL)
+	}
+	return successfulPaths, nil
 }
 
 func createURLButtons(urls []string) [][]tele.InlineButton {
-	var rows [][]tele.InlineButton
-	for i, url := range urls {
-		button := tele.InlineButton{
-			Text: fmt.Sprintf("Original Link #%d", i+1),
-			URL:  url,
-		}
-		rows = append(rows, []tele.InlineButton{button})
+	if len(urls) == 0 {
+		return nil
 	}
+	rows := make([][]tele.InlineButton, 0, len(urls)) // Pre-allocate
+	for i, u := range urls {
+		// Ensure URL is valid for Telegram button (absolute, well-formed)
+		// Telegram might reject malformed URLs. url.Parse check could be added here if needed.
+		parsedU, err := url.ParseRequestURI(u)
+		if err != nil || !parsedU.IsAbs() {
+			log.Printf("Warning: Skipping invalid URL for button '%s': %v", u, err)
+			continue
+		}
+		btn := tele.InlineButton{
+			Text: fmt.Sprintf("Original Link #%d", i+1),
+			URL:  u,
+		}
+		rows = append(rows, []tele.InlineButton{btn})
+	}
+	if len(rows) == 0 {
+		return nil
+	} // If all URLs were invalid
 	return rows
 }
