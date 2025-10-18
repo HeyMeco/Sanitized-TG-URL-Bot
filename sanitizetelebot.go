@@ -56,7 +56,7 @@ const (
 	instagramProfileCardSegment = "profilecard" // Path segment: /username/profilecard
 	instagramReelPathSegment    = "/reel/"
 	instagramPostPathSegment    = "/p/"
-	ddInstagramHost             = "d.ddinstagram.com"
+	ddInstagramHost             = "eeinstagram.com"
 
 	msgMarkerAnon        = "anon"
 	msgMarkerNoCut       = "nocut"
