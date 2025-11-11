@@ -43,6 +43,7 @@ const (
 	imageCacheDir       = "image_cache"
 
 	tiktokShortHost        = "vm.tiktok.com"
+	tiktokProHost          = "pro.tiktok.com"
 	tiktokHost             = "tiktok.com"
 	tiktokHostSuffix       = "tiktok.com" // Used with strings.HasSuffix
 	tiktokPhotoPathSegment = "/photo/"
@@ -318,7 +319,7 @@ func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTok
 			}
 
 			// --- TikTok URL Expansion ---
-			if parsedURL.Host == tiktokShortHost || parsedURL.Host == tiktokHost {
+			if parsedURL.Host == tiktokShortHost || parsedURL.Host == tiktokProHost || parsedURL.Host == tiktokHost {
 				expandedURLStr, expandErr := ExpandUrl(parsedURL.String()) // Uses global httpClient
 				if expandErr != nil {
 					log.Printf("Warning: Failed to expand TikTok URL '%s': %v. Proceeding with unexpanded.", parsedURL.String(), expandErr)
