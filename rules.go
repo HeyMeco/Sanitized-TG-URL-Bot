@@ -3,8 +3,8 @@ package main
 // DomainRules contains domain-specific rules for removing query parameters from URLs
 var DomainRules = map[string][]string{
 	"amazon":         {"pd_rd_", "_encoding", "psc", "tag", "ref_", "pf_rd_", "pf", "crid"},
-	"youtube.com":    {"feature", "kw", "si", "pp"},
-	"youtu.be":       {"si"},
+	"youtube.com":    {"feature", "kw", "si", "is", "pp"},
+	"youtu.be":       {"si", "is"},
 	"twitter.com":    {"t", "s", "ref_"},
 	"x.com":          {"t", "s", "ref_"},
 	"instagram.com":  {"igshid"},
@@ -142,8 +142,10 @@ var URLRules = []string{
 	"feature@*.youtube.com",
 	"kw@*.youtube.com",
 	"si@*.youtube.com",
+	"is@*.youtube.com",
 	"pp@*.youtube.com",
 	"si@*.youtu.be",
+	"is@*.youtu.be",
 	"wt_zmc",
 	"utm_source",
 	"utm_content",
