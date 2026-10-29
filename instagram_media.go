@@ -76,6 +76,9 @@ func processInstagramURL(u *url.URL, fetchMedia bool) instagramResult {
 	if link.Kind != instagram.KindPost {
 		return out
 	}
+	if cleaned := cleanInstagramPostURL(out.url); cleaned.String() != out.url.String() {
+		out.url, out.changed = cleaned, true
+	}
 
 	if fetchMedia && instagramLocalFetch {
 		media, note, err := fetchInstagramMedia(link.Shortcode)
@@ -92,6 +95,25 @@ func processInstagramURL(u *url.URL, fetchMedia bool) instagramResult {
 		out.url, out.changed = &rewritten, true
 	}
 	return out
+}
+
+// instagramKeptParams are the only query parameters kept on post links; Instagram
+// keeps adding new tracking tokens (igsh, igshid, xtok, ...), so everything else is dropped.
+var instagramKeptParams = []string{"img_index"}
+
+// cleanInstagramPostURL returns a copy of u without tracking parameters or fragment.
+func cleanInstagramPostURL(u *url.URL) *url.URL {
+	cleaned := *u
+	q := u.Query()
+	kept := url.Values{}
+	for _, name := range instagramKeptParams {
+		if v, ok := q[name]; ok {
+			kept[name] = v
+		}
+	}
+	cleaned.RawQuery = kept.Encode()
+	cleaned.Fragment, cleaned.RawFragment = "", ""
+	return &cleaned
 }
 
 // fetchInstagramMedia parses a post and downloads all of its photos and videos.

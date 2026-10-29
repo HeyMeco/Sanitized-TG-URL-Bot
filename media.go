@@ -1,6 +1,7 @@
 package main
 
 import (
+	"html"
 	"log"
 	"os"
 	"strings"
@@ -31,18 +32,17 @@ func removeMediaFiles(files []mediaFile) {
 	}
 }
 
-// buildMediaCaption appends notes (post descriptions) to base and keeps the
-// result within Telegram's caption limit, shortening the notes first.
+// buildMediaCaption returns an HTML caption: base followed by notes (post
+// descriptions) in an expandable blockquote. The visible text is kept within
+// Telegram's caption limit, shortening the notes first.
 func buildMediaCaption(base string, notes []string) string {
-	if len(notes) == 0 {
-		return truncateRunes(base, maxCaptionRunes)
-	}
-	const sep = "\n\n"
+	const sep = "\n"
 	avail := maxCaptionRunes - len([]rune(base)) - len(sep)
-	if avail < 16 { // Not enough room for a useful note.
-		return truncateRunes(base, maxCaptionRunes)
+	if len(notes) == 0 || avail < 16 { // No notes, or not enough room for a useful one.
+		return html.EscapeString(truncateRunes(base, maxCaptionRunes))
 	}
-	return base + sep + truncateRunes(strings.Join(notes, sep), avail)
+	quote := truncateRunes(strings.Join(notes, "\n\n"), avail)
+	return html.EscapeString(base) + sep + "<blockquote expandable>" + html.EscapeString(quote) + "</blockquote>"
 }
 
 // truncateRunes shortens s to at most n runes, marking the cut with an ellipsis.

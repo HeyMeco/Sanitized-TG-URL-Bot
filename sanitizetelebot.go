@@ -189,6 +189,9 @@ func handleTextMessage(c tele.Context, b *tele.Bot) error {
 
 	var sendErr error
 	if len(res.Media) > 0 {
+		// Media captions use HTML so the post description can be shown as a blockquote.
+		mediaOpts := *sendOpts
+		mediaOpts.ParseMode = tele.ModeHTML
 		// Prepare the base caption text
 		var baseCaption string
 		if c.Message().FromGroup() && strings.Contains(sanitizedMsg, msgMarkerAnon) {
@@ -216,7 +219,7 @@ func handleTextMessage(c tele.Context, b *tele.Bot) error {
 			if partNum == 1 { // Only the first part carries the post descriptions
 				notes = res.MediaNotes
 			}
-			caption := escapeMarkdown(buildMediaCaption(captionText, notes))
+			caption := buildMediaCaption(captionText, notes)
 
 			// Create album for this batch; the caption goes on the first item
 			album := make(tele.Album, 0, end-i)
@@ -231,9 +234,9 @@ func handleTextMessage(c tele.Context, b *tele.Bot) error {
 			// Telegram media groups need at least two items, so send single items directly.
 			var batchErr error
 			if len(album) == 1 {
-				_, batchErr = b.Send(c.Chat(), album[0], sendOpts)
+				_, batchErr = b.Send(c.Chat(), album[0], &mediaOpts)
 			} else {
-				_, batchErr = b.SendAlbum(c.Chat(), album, sendOpts)
+				_, batchErr = b.SendAlbum(c.Chat(), album, &mediaOpts)
 			}
 			if batchErr != nil {
 				sendErr = fmt.Errorf("failed to send media batch %d-%d: %w", i+1, end, batchErr)

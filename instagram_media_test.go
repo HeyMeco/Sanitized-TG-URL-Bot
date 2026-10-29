@@ -100,6 +100,13 @@ func TestSanitizeURLInstagramMedia(t *testing.T) {
 			wantNote:  "Instagram post by natgeo: Over the summer",
 		},
 		{
+			name:      "unknown tracking param",
+			message:   "https://www.instagram.com/p/DeAYvsnn4la/?xtok=abc123",
+			wantText:  "https://www.instagram.com/p/DeAYvsnn4la/",
+			wantKinds: "ppp",
+			wantNote:  "Instagram post by nasa: Swipe for countless stars",
+		},
+		{
 			name:      "reel",
 			message:   "https://www.instagram.com/reel/Chunk8-jurw/?igsh=abc&utm_source=ig_web_copy_link",
 			wantText:  "https://www.instagram.com/reel/Chunk8-jurw/",
@@ -191,6 +198,9 @@ func TestSanitizeURLInstagramWithoutFetching(t *testing.T) {
 		// Inline mode (fetchMedia=false): only parameter cleaning.
 		{"https://www.instagram.com/p/DfAWBERlz3A/?igshid=abc", "https://www.instagram.com/p/DfAWBERlz3A/", true},
 		{"https://www.instagram.com/reel/Chunk8-jurw/", "https://www.instagram.com/reel/Chunk8-jurw/", false},
+		// Unknown tracking params (xtok) are dropped from post links; img_index is kept.
+		{"https://www.instagram.com/p/DeAYvsnn4la/?img_index=3&xtok=abc#frag", "https://www.instagram.com/p/DeAYvsnn4la/?img_index=3", true},
+		{"https://www.instagram.com/reel/Chunk8-jurw/?foo=bar", "https://www.instagram.com/reel/Chunk8-jurw/", true},
 		// Profile cards are still turned into profile links.
 		{"https://www.instagram.com/natgeo/profilecard/?igsh=abc", "https://www.instagram.com/natgeo", true},
 		// Proxy hosts are left alone.
@@ -215,20 +225,23 @@ func TestSanitizeURLInstagramWithoutFetching(t *testing.T) {
 }
 
 func TestBuildMediaCaption(t *testing.T) {
-	if got := buildMediaCaption("@bob said: link", nil); got != "@bob said: link" {
+	if got := buildMediaCaption("@bob said: a<b & c", nil); got != "@bob said: a&lt;b &amp; c" {
 		t.Errorf("no notes: %q", got)
 	}
-	if got := buildMediaCaption("@bob said: link", []string{"Instagram post by nasa: hi"}); got != "@bob said: link\n\nInstagram post by nasa: hi" {
-		t.Errorf("with note: %q", got)
+	got := buildMediaCaption("@bob said: link", []string{"Instagram post by nasa: <3"})
+	if want := "@bob said: link\n<blockquote expandable>Instagram post by nasa: &lt;3</blockquote>"; got != want {
+		t.Errorf("with note: %q, want %q", got, want)
 	}
 
+	// Long notes are cut so the visible text fits Telegram's limit.
 	long := strings.Repeat("ü", 2000)
-	got := buildMediaCaption("@bob said: link", []string{long})
-	if n := len([]rune(got)); n != maxCaptionRunes {
-		t.Errorf("caption has %d runes, want %d", n, maxCaptionRunes)
+	got = buildMediaCaption("@bob said: link", []string{long})
+	visible := strings.NewReplacer("<blockquote expandable>", "", "</blockquote>", "").Replace(got)
+	if n := len([]rune(visible)); n != maxCaptionRunes {
+		t.Errorf("caption has %d visible runes, want %d", n, maxCaptionRunes)
 	}
-	if !strings.HasPrefix(got, "@bob said: link\n\n") || !strings.HasSuffix(got, "…") {
-		t.Errorf("long note caption = %q...", got[:40])
+	if !strings.HasPrefix(got, "@bob said: link\n<blockquote expandable>") || !strings.HasSuffix(got, "…</blockquote>") {
+		t.Errorf("long note caption = %q...", got[:60])
 	}
 
 	// A huge message leaves no room for notes; the base itself is shortened.

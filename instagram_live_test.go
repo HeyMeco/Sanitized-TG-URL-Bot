@@ -56,6 +56,9 @@ func TestInstagramLive(t *testing.T) {
 				t.Logf("%s %dx%d %d bytes", kind, m.Width, m.Height, st.Size())
 			}
 			t.Logf("text=%q notes=%q", res.Text, res.MediaNotes)
+			if strings.Contains(res.Text, "?") && !strings.Contains(res.Text, "img_index") {
+				t.Errorf("tracking params left in %q", res.Text)
+			}
 			if kinds.String() != tt.kinds {
 				t.Errorf("media kinds = %q, want %q", kinds.String(), tt.kinds)
 			}
