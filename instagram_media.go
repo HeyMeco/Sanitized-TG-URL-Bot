@@ -73,11 +73,11 @@ func processInstagramURL(u *url.URL, fetchMedia bool) instagramResult {
 		}
 		out.url, out.changed, link = canonical, true, resolved
 	}
+	if cleaned := cleanInstagramURL(out.url); cleaned.String() != out.url.String() {
+		out.url, out.changed = cleaned, true
+	}
 	if link.Kind != instagram.KindPost {
 		return out
-	}
-	if cleaned := cleanInstagramPostURL(out.url); cleaned.String() != out.url.String() {
-		out.url, out.changed = cleaned, true
 	}
 
 	if fetchMedia && instagramLocalFetch {
@@ -97,12 +97,13 @@ func processInstagramURL(u *url.URL, fetchMedia bool) instagramResult {
 	return out
 }
 
-// instagramKeptParams are the only query parameters kept on post links; Instagram
-// keeps adding new tracking tokens (igsh, igshid, xtok, ...), so everything else is dropped.
-var instagramKeptParams = []string{"img_index"}
+// instagramKeptParams are the only query parameters kept on instagram.com links
+// (carousel slide, search query). Instagram keeps adding new tracking tokens
+// (igsh, igshid, xtok, mdxt, srtk, ...), so everything else is dropped.
+var instagramKeptParams = []string{"img_index", "q"}
 
-// cleanInstagramPostURL returns a copy of u without tracking parameters or fragment.
-func cleanInstagramPostURL(u *url.URL) *url.URL {
+// cleanInstagramURL returns a copy of u without tracking parameters or fragment.
+func cleanInstagramURL(u *url.URL) *url.URL {
 	cleaned := *u
 	q := u.Query()
 	kept := url.Values{}

@@ -201,6 +201,10 @@ func TestSanitizeURLInstagramWithoutFetching(t *testing.T) {
 		// Unknown tracking params (xtok) are dropped from post links; img_index is kept.
 		{"https://www.instagram.com/p/DeAYvsnn4la/?img_index=3&xtok=abc#frag", "https://www.instagram.com/p/DeAYvsnn4la/?img_index=3", true},
 		{"https://www.instagram.com/reel/Chunk8-jurw/?foo=bar", "https://www.instagram.com/reel/Chunk8-jurw/", true},
+		// Non-post links (stories, profiles) are cleaned the same way.
+		{"https://www.instagram.com/stories/natgeo/1234567890?utm_source=ig_story_item_share&srtk=abc", "https://www.instagram.com/stories/natgeo/1234567890", true},
+		{"https://www.instagram.com/natgeo/?hl=de&srtk=abc", "https://www.instagram.com/natgeo/", true},
+		{"https://www.instagram.com/explore/search/keyword/?q=wolves", "https://www.instagram.com/explore/search/keyword/?q=wolves", false},
 		// Profile cards are still turned into profile links.
 		{"https://www.instagram.com/natgeo/profilecard/?igsh=abc", "https://www.instagram.com/natgeo", true},
 		// Proxy hosts are left alone.
