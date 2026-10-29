@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -103,6 +104,8 @@ func main() {
 	if tokenStr == "" {
 		log.Fatal("Error: Telegram bot token is empty or could not be loaded. Please provide a valid token via TELEGRAM_BOT_TOKEN env var or token.txt file.")
 	}
+	// Errors from the Telegram API include request URLs, which contain the token.
+	log.SetOutput(&redactingWriter{w: os.Stderr, secret: tokenStr})
 
 	pref := tele.Settings{
 		Token:  tokenStr,
@@ -124,6 +127,24 @@ func main() {
 
 	log.Println("Bot is starting...")
 	b.Start()
+}
+
+// redactingWriter replaces every occurrence of secret before writing to w.
+// The log package writes each entry with a single Write call, so a secret is
+// never split across writes.
+type redactingWriter struct {
+	w      io.Writer
+	secret string
+}
+
+func (r *redactingWriter) Write(p []byte) (int, error) {
+	if r.secret == "" || !bytes.Contains(p, []byte(r.secret)) {
+		return r.w.Write(p)
+	}
+	if _, err := r.w.Write(bytes.ReplaceAll(p, []byte(r.secret), []byte("<redacted>"))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func loadTelegramToken() string {
