@@ -36,11 +36,41 @@ var httpClient = &http.Client{
 	Timeout: 20 * time.Second, // Adjusted for potentially slow operations like multiple image downloads
 }
 
+// videoHTTPClient is used for video downloads, which can take longer than a page fetch.
+var videoHTTPClient = &http.Client{
+	Timeout: 90 * time.Second,
+}
+
+// mediaFile is a downloaded photo or video waiting to be sent to Telegram.
+type mediaFile struct {
+	Path    string
+	IsVideo bool
+	Width   int
+	Height  int
+}
+
+// sanitizeResult is everything sanitizeURL found out about a message.
+type sanitizeResult struct {
+	Text         string      // Message text with cleaned URLs.
+	WasSanitized bool        // True if the text changed or media was downloaded.
+	Media        []mediaFile // Downloaded media (TikTok photos, Instagram posts) to send as an album.
+	MediaNotes   []string    // Extra caption lines describing the media (e.g. Instagram author and caption).
+	OriginalURLs []string
+}
+
 // Constants for various strings and configurations
 const (
 	telegramTokenEnvVar = "TELEGRAM_BOT_TOKEN"
 	tokenFileName       = "token.txt"
 	imageCacheDir       = "image_cache"
+	videoCacheDir       = "video_cache"
+
+	// Telegram Bot API upload limits (multipart uploads).
+	maxPhotoUploadBytes = 10 << 20
+	maxVideoUploadBytes = 50 << 20
+	// Telegram limits media captions to 1024 characters and albums to 10 items.
+	maxCaptionRunes     = 1024
+	maxPhotosPerMessage = 10
 
 	tiktokShortHost        = "vm.tiktok.com"
 	tiktokProHost          = "pro.tiktok.com"
@@ -55,9 +85,6 @@ const (
 
 	instagramHostSuffix         = "instagram.com"
 	instagramProfileCardSegment = "profilecard" // Path segment: /username/profilecard
-	instagramReelPathSegment    = "/reel/"
-	instagramPostPathSegment    = "/p/"
-	ddInstagramHost             = "eeinstagram.com"
 
 	msgMarkerAnon        = "anon"
 	msgMarkerNoCut       = "nocut"
@@ -135,33 +162,33 @@ func handleTextMessage(c tele.Context, b *tele.Bot) error {
 		return nil // "nocut" keyword present, do nothing.
 	}
 
-	sanitizedMsg, wasSanitized, isTikTokPhotoAlbum, downloadedPhotoPaths, originalURLs, err := sanitizeURL(messageText)
+	res, err := sanitizeURL(messageText, true)
 	if err != nil {
 		log.Printf("Error sanitizing URL for text from user %s ('%s'): %v", username, messageText, err)
 		// Notify user about the error, optionally.
 		// c.Reply("Sorry, I couldn't process your message due to an internal error.")
 		return err // Propagate error to telebot library, it might log it or handle it.
 	}
+	// Clean up downloaded media however sending goes.
+	defer removeMediaFiles(res.Media)
 
-	if !wasSanitized {
+	if !res.WasSanitized {
 		return nil // No URLs were changed or special actions taken.
 	}
+	sanitizedMsg := res.Text
 
 	sendOpts := &tele.SendOptions{ParseMode: tele.ModeMarkdown}
 	if c.Message().IsReply() && c.Message().ReplyTo != nil {
 		sendOpts.ReplyTo = c.Message().ReplyTo
 	}
 
-	if len(originalURLs) > 0 {
-		buttons := createURLButtons(originalURLs)
+	if len(res.OriginalURLs) > 0 {
+		buttons := createURLButtons(res.OriginalURLs)
 		sendOpts.ReplyMarkup = &tele.ReplyMarkup{InlineKeyboard: buttons}
 	}
 
 	var sendErr error
-	if isTikTokPhotoAlbum && len(downloadedPhotoPaths) > 0 {
-		// Define the maximum number of photos per message
-		const maxPhotosPerMessage = 10
-
+	if len(res.Media) > 0 {
 		// Prepare the base caption text
 		var baseCaption string
 		if c.Message().FromGroup() && strings.Contains(sanitizedMsg, msgMarkerAnon) {
@@ -171,44 +198,46 @@ func handleTextMessage(c tele.Context, b *tele.Bot) error {
 		}
 
 		// Calculate total number of parts
-		totalParts := (len(downloadedPhotoPaths) + maxPhotosPerMessage - 1) / maxPhotosPerMessage
+		totalParts := (len(res.Media) + maxPhotosPerMessage - 1) / maxPhotosPerMessage
 
-		// Split photos into groups of 10
-		for i := 0; i < len(downloadedPhotoPaths); i += maxPhotosPerMessage {
+		// Split media into groups of 10
+		for i := 0; i < len(res.Media); i += maxPhotosPerMessage {
 			end := i + maxPhotosPerMessage
-			if end > len(downloadedPhotoPaths) {
-				end = len(downloadedPhotoPaths)
+			if end > len(res.Media) {
+				end = len(res.Media)
 			}
 
-			// Create album for this batch
-			album := make(tele.Album, 0, maxPhotosPerMessage)
-			for j, photoPath := range downloadedPhotoPaths[i:end] {
-				photo := &tele.Photo{File: tele.FromDisk(photoPath)}
-				if j == 0 { // Add caption to first photo of each album
-					partNum := (i / maxPhotosPerMessage) + 1
-					captionText := baseCaption
-					if partNum > 1 { // Add part number for all parts except the first
-						captionText = fmt.Sprintf("%s (Part %d/%d)", baseCaption, partNum, totalParts)
-					} else if totalParts > 1 { // For first part, only add number if there are multiple parts
-						captionText = fmt.Sprintf("%s (Part 1/%d)", baseCaption, totalParts)
-					}
-					photo.Caption = escapeMarkdown(captionText)
+			partNum := (i / maxPhotosPerMessage) + 1
+			captionText := baseCaption
+			if totalParts > 1 {
+				captionText = fmt.Sprintf("%s (Part %d/%d)", baseCaption, partNum, totalParts)
+			}
+			var notes []string
+			if partNum == 1 { // Only the first part carries the post descriptions
+				notes = res.MediaNotes
+			}
+			caption := escapeMarkdown(buildMediaCaption(captionText, notes))
+
+			// Create album for this batch; the caption goes on the first item
+			album := make(tele.Album, 0, end-i)
+			for j, m := range res.Media[i:end] {
+				itemCaption := ""
+				if j == 0 {
+					itemCaption = caption
 				}
-				album = append(album, photo)
+				album = append(album, m.inputMedia(itemCaption))
 			}
 
-			// Send this batch
-			_, batchErr := b.SendAlbum(c.Chat(), album, sendOpts)
+			// Telegram media groups need at least two items, so send single items directly.
+			var batchErr error
+			if len(album) == 1 {
+				_, batchErr = b.Send(c.Chat(), album[0], sendOpts)
+			} else {
+				_, batchErr = b.SendAlbum(c.Chat(), album, sendOpts)
+			}
 			if batchErr != nil {
-				sendErr = fmt.Errorf("failed to send photo batch %d-%d: %w", i+1, end, batchErr)
+				sendErr = fmt.Errorf("failed to send media batch %d-%d: %w", i+1, end, batchErr)
 				break // Stop sending more batches if one fails
-			}
-		}
-
-		// Clean up downloaded images after attempting to send all batches
-		for _, photoPath := range downloadedPhotoPaths {
-			if rmErr := os.Remove(photoPath); rmErr != nil {
-				log.Printf("Failed to remove cached image %s: %v", photoPath, rmErr)
 			}
 		}
 	} else {
@@ -236,13 +265,15 @@ func handleTextMessage(c tele.Context, b *tele.Bot) error {
 
 func handleInlineQuery(c tele.Context, b *tele.Bot) error {
 	queryText := c.Query().Text
-	sanitizedMsg, wasSanitized, _, _, _, err := sanitizeURL(queryText)
+	// Inline results are text only, so don't download any media here.
+	res, err := sanitizeURL(queryText, false)
 	if err != nil {
 		log.Printf("Error sanitizing URL for inline query '%s': %v", queryText, err)
 		return err
 	}
+	sanitizedMsg := res.Text
 
-	if wasSanitized {
+	if res.WasSanitized {
 		result := &tele.ArticleResult{
 			Title:       "Sanitized URL",                // Could be more dynamic, e.g., show the cleaned URL snippet
 			Text:        sanitizedMsg,                   // This is MessageText, which is sent when user selects the result
@@ -272,7 +303,11 @@ func getUsername(sender *tele.User) string {
 	return sender.FirstName // Fallback to FirstName if username is not set
 }
 
-func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTokPhotoAlbum bool, downloadedPhotoPaths []string, originalURLs []string, err error) {
+// sanitizeURL cleans every URL in text. With fetchMedia set it also downloads
+// media for TikTok photo posts and Instagram posts; the caller must remove the
+// returned files (see removeMediaFiles).
+func sanitizeURL(text string, fetchMedia bool) (sanitizeResult, error) {
+	var res sanitizeResult
 	var sb strings.Builder
 	sb.Grow(len(text) + 64) // Pre-allocate: original length + buffer for prefixes/changes
 
@@ -307,7 +342,7 @@ func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTok
 				continue
 			}
 
-			originalURLs = append(originalURLs, word)
+			res.OriginalURLs = append(res.OriginalURLs, word)
 			currentWordSanitized := false
 			processedWord := word
 
@@ -339,13 +374,15 @@ func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTok
 
 			// --- TikTok Photo Album Processing (after potential expansion) ---
 			if strings.HasSuffix(parsedURL.Host, tiktokHostSuffix) && strings.Contains(parsedURL.Path, tiktokPhotoPathSegment) {
-				isTikTokPhotoAlbum = true                                         // Mark that this type of URL was encountered
-				tempPhotoPaths, fetchErr := fetchTikTokPhotos(parsedURL.String()) // Uses global httpClient
-				if fetchErr != nil {
-					log.Printf("Warning: Failed to fetch TikTok photos for '%s': %v. URL params will be cleaned, but no album.", parsedURL.String(), fetchErr)
-					isTikTokPhotoAlbum = false // Reset if fetching fails, it's not an album then
-				} else {
-					downloadedPhotoPaths = append(downloadedPhotoPaths, tempPhotoPaths...)
+				if fetchMedia {
+					tempPhotoPaths, fetchErr := fetchTikTokPhotos(parsedURL.String()) // Uses global httpClient
+					if fetchErr != nil {
+						log.Printf("Warning: Failed to fetch TikTok photos for '%s': %v. URL params will be cleaned, but no album.", parsedURL.String(), fetchErr)
+					} else {
+						for _, photoPath := range tempPhotoPaths {
+							res.Media = append(res.Media, mediaFile{Path: photoPath})
+						}
+					}
 				}
 
 				if parsedURL.RawQuery != "" { // Always remove query params for TikTok photo URLs
@@ -411,36 +448,35 @@ func sanitizeURL(text string) (sanitizedText string, wasSanitized bool, isTikTok
 						processedWord = parsedURL.String()
 						currentWordSanitized = true
 					}
-					if strings.Contains(parsedURL.Path, instagramReelPathSegment) || strings.Contains(parsedURL.Path, instagramPostPathSegment) {
-						if parsedURL.Host != ddInstagramHost {
-							parsedURL.Host = ddInstagramHost
-							processedWord = parsedURL.String()
-							currentWordSanitized = true
-						}
+				}
+				if ig := processInstagramURL(parsedURL, fetchMedia); ig.changed {
+					parsedURL = ig.url
+					processedWord = parsedURL.String()
+					currentWordSanitized = true
+					res.Media = append(res.Media, ig.media...)
+					if ig.note != "" {
+						res.MediaNotes = append(res.MediaNotes, ig.note)
 					}
 				}
 			}
 			sb.WriteString(processedWord)
 			if currentWordSanitized {
-				wasSanitized = true
+				res.WasSanitized = true
 			}
 		}
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
-		return "", false, false, nil, nil, fmt.Errorf("error scanning input text: %w", scanErr)
+		removeMediaFiles(res.Media)
+		return sanitizeResult{}, fmt.Errorf("error scanning input text: %w", scanErr)
 	}
 
-	// If it was marked as a TikTok photo album opportunity AND photos were actually downloaded,
-	// then it counts as "sanitized" (because an action is taken).
-	if isTikTokPhotoAlbum && len(downloadedPhotoPaths) > 0 {
-		wasSanitized = true
-	} else {
-		// If photo download failed, ensure isTikTokPhotoAlbum is false so it's not treated as an album.
-		isTikTokPhotoAlbum = false
+	// Downloaded media counts as "sanitized" because the bot will repost it.
+	if len(res.Media) > 0 {
+		res.WasSanitized = true
 	}
-
-	return sb.String(), wasSanitized, isTikTokPhotoAlbum, downloadedPhotoPaths, originalURLs, nil
+	res.Text = sb.String()
+	return res, nil
 }
 
 func containsURL(text string) bool {
@@ -473,51 +509,78 @@ func escapeMarkdown(text string) string {
 }
 
 func downloadImage(imageURL string) (string, error) {
-	if err := os.MkdirAll(imageCacheDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create image cache directory %s: %w", imageCacheDir, err)
+	return downloadMedia(imageURL, mediaDownload{dir: imageCacheDir, defaultExt: ".jpg", client: httpClient})
+}
+
+// mediaDownload configures downloadMedia.
+type mediaDownload struct {
+	dir        string
+	defaultExt string
+	client     *http.Client
+	maxBytes   int64       // 0 means unlimited.
+	header     http.Header // Extra request headers, may be nil.
+}
+
+// downloadMedia saves mediaURL into opts.dir and returns the file path.
+func downloadMedia(mediaURL string, opts mediaDownload) (string, error) {
+	if err := os.MkdirAll(opts.dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cache directory %s: %w", opts.dir, err)
 	}
 
 	hasher := sha256.New()
-	hasher.Write([]byte(imageURL))
+	hasher.Write([]byte(mediaURL))
 	hashStr := hex.EncodeToString(hasher.Sum(nil))[:16] // Short hash for filename
 
-	parsedURLForExt, err := url.Parse(imageURL)
+	parsedURLForExt, err := url.Parse(mediaURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse image URL %s for extension: %w", imageURL, err)
+		return "", fmt.Errorf("failed to parse media URL %s for extension: %w", mediaURL, err)
 	}
 	ext := filepath.Ext(parsedURLForExt.Path)
 	if ext == "" {
-		ext = ".jpg" // Default extension
+		ext = opts.defaultExt
 	}
 
-	filename := filepath.Join(imageCacheDir, fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hashStr, ext))
+	filename := filepath.Join(opts.dir, fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hashStr, ext))
 
-	req, err := http.NewRequest("GET", imageURL, nil)
+	req, err := http.NewRequest("GET", mediaURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create GET request for image %s: %w", imageURL, err)
+		return "", fmt.Errorf("failed to create GET request for %s: %w", mediaURL, err)
 	}
-	// req.Header.Set("User-Agent", "...") // Optional: if server requires specific UA
+	for k, v := range opts.header {
+		req.Header[k] = v
+	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := opts.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to start download for %s: %w", imageURL, err)
+		return "", fmt.Errorf("failed to start download for %s: %w", mediaURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download image %s: status %s", imageURL, resp.Status)
+		return "", fmt.Errorf("failed to download %s: status %s", mediaURL, resp.Status)
+	}
+	if opts.maxBytes > 0 && resp.ContentLength > opts.maxBytes {
+		return "", fmt.Errorf("%s is too large (%d bytes, limit %d)", mediaURL, resp.ContentLength, opts.maxBytes)
 	}
 
 	file, err := os.Create(filename)
 	if err != nil {
-		return "", fmt.Errorf("failed to create image file %s: %w", filename, err)
+		return "", fmt.Errorf("failed to create file %s: %w", filename, err)
 	}
 	defer file.Close()
 
-	_, err = io.Copy(file, resp.Body)
+	body := io.Reader(resp.Body)
+	if opts.maxBytes > 0 {
+		body = io.LimitReader(resp.Body, opts.maxBytes+1)
+	}
+	written, err := io.Copy(file, body)
 	if err != nil {
 		_ = os.Remove(filename) // Attempt to clean up partially written file
-		return "", fmt.Errorf("failed to write image data to %s: %w", filename, err)
+		return "", fmt.Errorf("failed to write data to %s: %w", filename, err)
+	}
+	if opts.maxBytes > 0 && written > opts.maxBytes {
+		_ = os.Remove(filename)
+		return "", fmt.Errorf("%s is larger than the %d byte limit", mediaURL, opts.maxBytes)
 	}
 	return filename, nil
 }

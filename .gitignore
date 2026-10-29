@@ -25,3 +25,9 @@ go.work
 #Telegram Bot Token
 *token.txt
 sanitizetelebot_linux_aarch64
+
+# Media caches and build output
+image_cache/
+video_cache/
+target/
+sanitizetelebot-*
