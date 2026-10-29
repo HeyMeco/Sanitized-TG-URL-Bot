@@ -45,6 +45,23 @@ func buildMediaCaption(base string, notes []string) string {
 	return html.EscapeString(base) + sep + "<blockquote expandable>" + html.EscapeString(quote) + "</blockquote>"
 }
 
+// maxNoteCaptionRunes caps how much of a post's own caption goes into a note.
+const maxNoteCaptionRunes = 300
+
+// postNote describes a post as "<Platform> post by <author>: <caption>".
+// The author is written without "@" so Telegram doesn't link it to an
+// unrelated Telegram user.
+func postNote(platform, author, caption string) string {
+	note := platform + " post"
+	if author != "" {
+		note += " by " + author
+	}
+	if caption = strings.TrimSpace(caption); caption != "" {
+		note += ": " + truncateRunes(caption, maxNoteCaptionRunes)
+	}
+	return note
+}
+
 // truncateRunes shortens s to at most n runes, marking the cut with an ellipsis.
 func truncateRunes(s string, n int) string {
 	r := []rune(s)

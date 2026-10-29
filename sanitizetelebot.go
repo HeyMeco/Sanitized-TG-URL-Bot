@@ -30,6 +30,16 @@ type TikwmResponse struct {
 // Data holds the actual data from TikwmResponse
 type Data struct {
 	Images []string `json:"images"`
+	Title  string   `json:"title"` // Post caption.
+	Author struct {
+		UniqueID string `json:"unique_id"`
+		Nickname string `json:"nickname"`
+	} `json:"author"`
+}
+
+// tikTokNote describes a TikTok post for the media caption.
+func tikTokNote(d Data) string {
+	return postNote("TikTok", d.Author.UniqueID, d.Title)
 }
 
 // Global HTTP client for making external requests with a timeout.
@@ -401,12 +411,15 @@ func sanitizeURL(text string, fetchMedia bool) (sanitizeResult, error) {
 			// --- TikTok Photo Album Processing (after potential expansion) ---
 			if strings.HasSuffix(parsedURL.Host, tiktokHostSuffix) && strings.Contains(parsedURL.Path, tiktokPhotoPathSegment) {
 				if fetchMedia {
-					tempPhotoPaths, fetchErr := fetchTikTokPhotos(parsedURL.String()) // Uses global httpClient
+					tempPhotoPaths, note, fetchErr := fetchTikTokPhotos(parsedURL.String()) // Uses global httpClient
 					if fetchErr != nil {
 						log.Printf("Warning: Failed to fetch TikTok photos for '%s': %v. URL params will be cleaned, but no album.", parsedURL.String(), fetchErr)
 					} else {
 						for _, photoPath := range tempPhotoPaths {
 							res.Media = append(res.Media, mediaFile{Path: photoPath})
+						}
+						if note != "" {
+							res.MediaNotes = append(res.MediaNotes, note)
 						}
 					}
 				}
@@ -611,35 +624,37 @@ func downloadMedia(mediaURL string, opts mediaDownload) (string, error) {
 	return filename, nil
 }
 
-func fetchTikTokPhotos(photoPostURL string) ([]string, error) {
+// fetchTikTokPhotos downloads a TikTok photo post and returns the file paths
+// plus a caption note (author and post text).
+func fetchTikTokPhotos(photoPostURL string) ([]string, string, error) {
 	apiURL := fmt.Sprintf("https://tikwm.com/api?url=%s&hd=1&cursor=0", url.QueryEscape(photoPostURL))
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request for tikwm API: %w", err)
+		return nil, "", fmt.Errorf("failed to create request for tikwm API: %w", err)
 	}
 	// req.Header.Set("User-Agent", "...") // Optional: if tikwm API requires it
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tikwm API request failed for %s: %w", photoPostURL, err)
+		return nil, "", fmt.Errorf("tikwm API request failed for %s: %w", photoPostURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tikwm API for %s returned status %s", photoPostURL, resp.Status)
+		return nil, "", fmt.Errorf("tikwm API for %s returned status %s", photoPostURL, resp.Status)
 	}
 
 	var tikwmResp TikwmResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tikwmResp); err != nil {
-		return nil, fmt.Errorf("failed to decode tikwm API response for %s: %w", photoPostURL, err)
+		return nil, "", fmt.Errorf("failed to decode tikwm API response for %s: %w", photoPostURL, err)
 	}
 
 	if tikwmResp.Code != 0 {
-		return nil, fmt.Errorf("tikwm API error for %s (code %d): %s", photoPostURL, tikwmResp.Code, tikwmResp.Msg)
+		return nil, "", fmt.Errorf("tikwm API error for %s (code %d): %s", photoPostURL, tikwmResp.Code, tikwmResp.Msg)
 	}
 	if len(tikwmResp.Data.Images) == 0 {
 		// This can happen if a video link is passed to a photo endpoint, or if the post has no images.
-		return nil, fmt.Errorf("tikwm API returned no images for %s (Code: %d, Msg: %s)", photoPostURL, tikwmResp.Code, tikwmResp.Msg)
+		return nil, "", fmt.Errorf("tikwm API returned no images for %s (Code: %d, Msg: %s)", photoPostURL, tikwmResp.Code, tikwmResp.Msg)
 	}
 
 	maxConcurrentDownloads := 10 // Limit concurrency to avoid overwhelming servers/network
@@ -681,11 +696,11 @@ func fetchTikTokPhotos(photoPostURL string) ([]string, error) {
 
 	if len(successfulPaths) == 0 {
 		if firstErr != nil {
-			return nil, fmt.Errorf("all image downloads failed for %s; first error: %w", photoPostURL, firstErr)
+			return nil, "", fmt.Errorf("all image downloads failed for %s; first error: %w", photoPostURL, firstErr)
 		}
-		return nil, fmt.Errorf("no images were successfully downloaded for %s, though API indicated images were present", photoPostURL)
+		return nil, "", fmt.Errorf("no images were successfully downloaded for %s, though API indicated images were present", photoPostURL)
 	}
-	return successfulPaths, nil
+	return successfulPaths, tikTokNote(tikwmResp.Data), nil
 }
 
 func createURLButtons(urls []string) [][]tele.InlineButton {

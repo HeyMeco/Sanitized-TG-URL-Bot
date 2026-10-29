@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -264,7 +265,7 @@ func TestInstagramNote(t *testing.T) {
 		t.Errorf("no caption: %q", got)
 	}
 	long := instagramNote(&instagram.Post{Username: "x", Caption: strings.Repeat("y", 1000)})
-	if n := len([]rune(long)); n != len("Instagram post by x: ")+maxInstagramCaptionRunes {
+	if n := len([]rune(long)); n != len("Instagram post by x: ")+maxNoteCaptionRunes {
 		t.Errorf("long caption note has %d runes", n)
 	}
 }
@@ -300,5 +301,19 @@ func TestDownloadMediaSizeLimit(t *testing.T) {
 	path, err := downloadMedia(srv.URL+"/ok.mp4", mediaDownload{dir: dir, defaultExt: ".mp4", client: srv.Client(), maxBytes: 100})
 	if err != nil || !strings.HasSuffix(path, ".mp4") {
 		t.Errorf("downloadMedia = %q, %v", path, err)
+	}
+}
+
+func TestTikTokNote(t *testing.T) {
+	var resp TikwmResponse
+	body := `{"code":0,"msg":"success","data":{"title":" Sunset dump 🌅 #travel ","author":{"unique_id":"some.user","nickname":"Some User"},"images":["https://cdn.example/1.jpg","https://cdn.example/2.jpg"]}}`
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := tikTokNote(resp.Data); got != "TikTok post by some.user: Sunset dump 🌅 #travel" {
+		t.Errorf("note = %q", got)
+	}
+	if got := tikTokNote(Data{}); got != "TikTok post" {
+		t.Errorf("empty note = %q", got)
 	}
 }

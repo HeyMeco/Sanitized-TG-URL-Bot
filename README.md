@@ -53,7 +53,8 @@ Common tracking parameters (`utm_*`, `fbclid`, `gclid`, `igsh`, ...) are removed
 ## TikTok
 - Short links (`vm.tiktok.com`, `pro.tiktok.com`) are expanded first.
 - Video links are rewritten to `vm.dstn.to` for an embeddable preview.
-- Photo posts (`/photo/`) are downloaded via tikwm.com and reposted as an album (split into parts of 10).
+- Photo posts (`/photo/`) are downloaded via tikwm.com and reposted as an album (split into parts of 10),
+  with the author and caption in an expandable quote below the link.
 
 ## Instagram
 Posts, carousels (including mixed photo/video), reels and `/tv/` links are downloaded by the bot itself

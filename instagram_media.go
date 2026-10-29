@@ -22,8 +22,7 @@ const (
 	// the cleaned instagram.com link is sent instead.
 	instagramFallbackHostEnvVar = "INSTAGRAM_FALLBACK_HOST"
 
-	instagramFetchTimeout    = 30 * time.Second
-	maxInstagramCaptionRunes = 300
+	instagramFetchTimeout = 30 * time.Second
 )
 
 var (
@@ -177,17 +176,8 @@ func downloadInstagramItems(items []instagram.MediaItem) ([]mediaFile, error) {
 	return files, nil
 }
 
-// instagramNote describes a post for the Telegram caption. The author is
-// written without "@" so Telegram doesn't link it to an unrelated Telegram user.
+// instagramNote describes an Instagram post for the media caption.
 func instagramNote(post *instagram.Post) string {
-	note := "Instagram post"
-	if post.Username != "" {
-		note += " by " + post.Username
-	}
 	// Instagram captions often use U+2063 (invisible separator) for spacing.
-	caption := strings.TrimSpace(strings.ReplaceAll(post.Caption, "\u2063", ""))
-	if caption != "" {
-		note += ": " + truncateRunes(caption, maxInstagramCaptionRunes)
-	}
-	return note
+	return postNote("Instagram", post.Username, strings.ReplaceAll(post.Caption, "\u2063", ""))
 }
