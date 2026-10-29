@@ -125,7 +125,9 @@ func main() {
 		return handleInlineQuery(c, b)
 	})
 
-	log.Println("Bot is starting...")
+	// NewBot already called getMe, so the token works and Telegram is reachable.
+	log.Printf("Connected to Telegram as @%s (id %d). Listening for messages...", b.Me.Username, b.Me.ID)
+	log.Printf("Instagram: local fetch %v, fallback host %q", instagramLocalFetch, instagramFallbackHost)
 	b.Start()
 }
 
